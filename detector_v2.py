@@ -94,6 +94,39 @@ def draw_contours(frame_bgr: np.ndarray, mask: np.ndarray,
     return output
 
 
+@dataclass(frozen=True)
+class ClassifiedParticle:
+    """One detected+classified particle. Exposes the centroid and label the
+    tracker needs, plus the contour for drawing."""
+    contour: np.ndarray
+    label: str  # "fiber" | "amorphous"
+    bbox: tuple[int, int, int, int]  # x, y, w, h
+
+    @property
+    def centroid(self) -> tuple[int, int]:
+        x, y, w, h = self.bbox
+        return x + w // 2, y + h // 2
+
+
+def classify_frame(frame_bgr: np.ndarray,
+                   classifier: RandomForestParticleClassifier,
+                   cfg: ChannelSegmentationConfig = ChannelSegmentationConfig()
+                   ) -> list[ClassifiedParticle]:
+    """Full per-frame pipeline: segment -> contours -> area filter ->
+    classify. Returns the particles the tracker consumes."""
+    stages = segment_channels(frame_bgr, cfg.green_thresh)
+    kept, _ = filter_by_area(
+        extract_contours(stages["mascara_g"]), cfg.min_area, cfg.max_area)
+    gray = stages["canal_g"]
+    return [
+        ClassifiedParticle(
+            contour,
+            classifier.classify(extract_features(contour, gray)),
+            cv2.boundingRect(contour))
+        for contour in kept
+    ]
+
+
 def classify_particles(kept: list[np.ndarray], gray: np.ndarray,
                        classifier: RandomForestParticleClassifier
                        ) -> list[str]:
