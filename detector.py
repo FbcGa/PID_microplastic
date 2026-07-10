@@ -7,8 +7,12 @@ contours -> features -> classification.
 Stateless per frame (no reference background), so it works live and on
 still images. The legacy "background" mode (absdiff against a reference
 frame) is kept behind config.segmentation_mode for comparison.
+
+Usage (single-frame viewer):
+    uv run detector.py frames/frame2.jpg
 """
 
+import argparse
 from dataclasses import dataclass
 from enum import Enum
 
@@ -281,3 +285,50 @@ class MicroplasticDetector:
         core = cv2.mean(roi, mask=core_mask)[0]
         rim = cv2.mean(roi, mask=rim_mask)[0] if cv2.countNonZero(rim_mask) else mean
         return mean, core, rim
+
+
+def show_result(frame_bgr: np.ndarray, result: DetectionResult) -> None:
+    """Two-panel figure: original | detected contours over the original."""
+    import matplotlib.pyplot as plt
+
+    contoured = frame_bgr.copy()
+    cv2.drawContours(contoured, [p.contour for p in result.particles],
+                     -1, (0, 255, 0), 2)
+
+    frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
+    contoured_rgb = cv2.cvtColor(contoured, cv2.COLOR_BGR2RGB)
+
+    fig, axes = plt.subplots(1, 2, figsize=(12, 5))
+    axes[0].imshow(frame_rgb)
+    axes[0].set_title("Original")
+    axes[1].imshow(contoured_rgb)
+    axes[1].set_title("Contornos (oscuridad local)")
+    for ax in axes:
+        ax.axis("off")
+    fig.tight_layout()
+    plt.show()
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Local-darkness detection over a single frame, "
+                     "showing the original next to the detected contours.")
+    parser.add_argument("frame", help="Path to the test frame (image file)")
+    return parser.parse_args()
+
+
+def main() -> None:
+    args = parse_args()
+    frame = cv2.imread(args.frame)
+    if frame is None:
+        raise IOError(f"Could not load frame: {args.frame}")
+
+    detector = MicroplasticDetector(DetectionConfig())
+    result = detector.detect(frame)
+    print(f"Particulas detectadas: {len(result.particles)} | "
+          f"burbujas descartadas: {result.discarded_bubbles}")
+    show_result(frame, result)
+
+
+if __name__ == "__main__":
+    main()
