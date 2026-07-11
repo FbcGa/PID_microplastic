@@ -2,7 +2,7 @@
 
 Single source of truth for the feature vector: the same `extract_features`
 is used both to build the training dataset (label_particles.py) and at
-inference time (rf_classifier.py / detector_v2.py), so features can never
+inference time (rf_classifier.py / detector_v3.py), so features can never
 be computed differently between training and prediction.
 
 Shape descriptors dominate the fiber-vs-amorphous distinction; a few cheap
@@ -37,7 +37,7 @@ def extract_features(contour: np.ndarray, gray: np.ndarray) -> dict[str, float]:
     """Descriptors for one contour over a grayscale image.
 
     `gray` is the single-channel image the intensity descriptors are read
-    from (e.g. the green channel detector_v2 segments on, or a BGR->GRAY
+    from (e.g. the green channel detector_v3 segments on, or a BGR->GRAY
     conversion). Returns a dict keyed by FEATURE_NAMES.
     """
     area = float(cv2.contourArea(contour))

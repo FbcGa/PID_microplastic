@@ -6,7 +6,7 @@ No directional flow: counting is done via unique IDs, not a crossing
 line, since particles float erratically.
 
 Decoupled from the detector: it consumes any object exposing a `centroid`
-(x, y) and a `label` string (e.g. detector_v2.ClassifiedParticle), so the
+(x, y) and a `label` string (e.g. detector_v3.ClassifiedParticle), so the
 class labels come straight from the Random Forest ("fiber"/"amorphous").
 """
 
@@ -30,16 +30,16 @@ class Detection(Protocol):
 class Track:
     """State of a particle tracked across frames."""
 
-    _next_id = 1
-
-    def __init__(self, detection: Detection):
-        self.id = Track._next_id
-        Track._next_id += 1
+    def __init__(self, detection: Detection, track_id: int):
+        self.id = track_id
         self.position = np.array(detection.centroid, dtype=float)
         self.velocity = np.zeros(2, dtype=float)
         self.frames_missing = 0
         self.hits = 1
         self.confirmed = False
+        # Class the track was last counted under (set when confirmed);
+        # lets the Tracker move the count if the majority vote later flips.
+        self.counted_label: str | None = None
         self._class_history: Counter[str] = Counter([detection.label])
         # Last actually observed position (not predicted): velocity must be
         # measured between observations, never against the prediction.
@@ -81,6 +81,7 @@ class Tracker:
         self._cfg = config
         self._tracks: list[Track] = []
         self._counts: Counter[str] = Counter()
+        self._next_id = 1
 
     @property
     def counts(self) -> dict[str, int]:
@@ -112,13 +113,19 @@ class Tracker:
             track.update(detections[detection_idx], self._cfg.velocity_alpha)
             if not track.confirmed and track.hits >= self._cfg.min_hits:
                 track.confirmed = True
+                track.counted_label = track.label
                 self._counts[track.label] += 1
+            elif track.confirmed and track.label != track.counted_label:
+                self._counts[track.counted_label] -= 1
+                self._counts[track.label] += 1
+                track.counted_label = track.label
 
         for track_idx in unmatched_tracks:
             self._tracks[track_idx].frames_missing += 1
 
         for detection_idx in unmatched_detections:
-            self._tracks.append(Track(detections[detection_idx]))
+            self._tracks.append(Track(detections[detection_idx], self._next_id))
+            self._next_id += 1
 
         self._tracks = [t for t in self._tracks
                         if t.frames_missing <= self._cfg.max_missed]

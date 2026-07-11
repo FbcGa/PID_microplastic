@@ -1,13 +1,13 @@
 """Entry point: detect, classify and track microplastics over a video.
 
-Per frame: detector_v2 segments + the Random Forest classifies each
-particle (fiber/amorphous), then the tracker assigns stable IDs so each
-particle is counted once. Requires a trained model (rf_model.joblib);
-train it first with train_rf.py.
+Per frame: detector_v3 segments (resta contra una imagen de fondo) + the
+Random Forest classifies each particle (fiber/amorphous), then the tracker
+assigns stable IDs so each particle is counted once. Requires a trained
+model (rf_model.joblib); train it first with train_rf.py.
 
 Usage:
-    uv run main.py video.mp4
-    uv run main.py video.mp4 --model rf_model.joblib --no-display
+    uv run main.py video.mp4 --background fondo.jpg
+    uv run main.py video.mp4 --background fondo.jpg --model rf_model.joblib --no-display
 
 Keys during playback:
     q / ESC  quit
@@ -15,15 +15,17 @@ Keys during playback:
 """
 
 import argparse
+import time
 from pathlib import Path
 
 import cv2
 
 from config import TrackerConfig
-from detector_v2 import (CLASS_COLORS, CLASS_LABELS, ChannelSegmentationConfig,
-                         ClassifiedParticle, classify_frame)
+from detector_v3 import (CLASS_COLORS, CLASS_LABELS, BackgroundSegmentationConfig,
+                         ClassifiedParticle, classify_frame_v3)
 from rf_classifier import load_if_available
 from tracker import Track, Tracker
+from utils import crop_top_bottom_strips
 
 WINDOW = "Microplasticos - deteccion / clasificacion / tracking"
 FONT = cv2.FONT_HERSHEY_SIMPLEX
@@ -61,8 +63,8 @@ def _draw_counts(frame_bgr, n_particles: int, tracker: Tracker) -> None:
                     (255, 255, 255), 1)
 
 
-def run(video_path: str, model_path: Path,
-        cfg: ChannelSegmentationConfig, display: bool = True) -> Tracker:
+def run(video_path: str, model_path: Path, background_bgr,
+        cfg: BackgroundSegmentationConfig, display: bool = True) -> Tracker:
     classifier = load_if_available(model_path)
     if classifier is None:
         raise FileNotFoundError(
@@ -73,25 +75,32 @@ def run(video_path: str, model_path: Path,
     if not cap.isOpened():
         raise IOError(f"No se pudo abrir el video: {video_path}")
 
-    Track._next_id = 1  # ids empiezan en 1 por corrida
     tracker = Tracker(TrackerConfig())
+    background_bgr = crop_top_bottom_strips(background_bgr)
+    background_g = background_bgr[:, :, 1]
     fps = cap.get(cv2.CAP_PROP_FPS)
-    delay = max(1, int(1000 / fps)) if fps > 0 else 30
+    frame_budget_ms = 1000 / fps if fps > 0 else 33.3
     paused = False
 
     try:
         while True:
             if not paused:
+                t0 = time.perf_counter()
                 ok, frame = cap.read()
                 if not ok:
                     break
-                particles = classify_frame(frame, classifier, cfg)
+                # Recorte de bordes ni bien se recibe el frame: esas areas
+                # no deben entrar ni a la clasificacion ni al tracker.
+                frame = crop_top_bottom_strips(frame)
+                particles = classify_frame_v3(frame, background_bgr, classifier, cfg, background_g)
                 tracks = tracker.update(particles)
                 if display:
                     cv2.imshow(WINDOW, annotate(frame, particles, tracks, tracker))
+                elapsed_ms = (time.perf_counter() - t0) * 1000
+                wait = max(1, int(frame_budget_ms - elapsed_ms))
 
             if display:
-                key = cv2.waitKey(delay) & 0xFF
+                key = cv2.waitKey(wait) & 0xFF
                 if key in (ord("q"), 27):  # 27 = ESC
                     break
                 if key == ord(" "):
@@ -107,15 +116,13 @@ def run(video_path: str, model_path: Path,
 
 
 def parse_args() -> argparse.Namespace:
-    defaults = ChannelSegmentationConfig()
     parser = argparse.ArgumentParser(
         description="Deteccion + clasificacion RF + tracking sobre un video.")
     parser.add_argument("video", help="Ruta del video a procesar")
+    parser.add_argument("--background", type=Path, required=True,
+                        help="Imagen de fondo (agua limpia, sin particulas)")
     parser.add_argument("--model", type=Path, default=Path("rf_model.joblib"),
                         help="Modelo Random Forest entrenado")
-    parser.add_argument("--green-thresh", type=int, default=defaults.green_thresh)
-    parser.add_argument("--min-area", type=float, default=defaults.min_area)
-    parser.add_argument("--max-area", type=float, default=defaults.max_area)
     parser.add_argument("--no-display", action="store_true",
                         help="No mostrar ventana; solo procesar y contar")
     return parser.parse_args()
@@ -123,11 +130,11 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
-    cfg = ChannelSegmentationConfig(
-        green_thresh=args.green_thresh,
-        min_area=args.min_area,
-        max_area=args.max_area)
-    run(args.video, args.model, cfg, display=not args.no_display)
+    background = cv2.imread(str(args.background))
+    if background is None:
+        raise IOError(f"Could not load background: {args.background}")
+    run(args.video, args.model, background, BackgroundSegmentationConfig(),
+        display=not args.no_display)
 
 
 if __name__ == "__main__":

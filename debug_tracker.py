@@ -1,6 +1,6 @@
 """Frame-by-frame tracker debug log for a whole video.
 
-Runs the same pipeline as main.py (detector_v2 segmentation -> RF
+Runs the same pipeline as main.py (detector_v3 segmentation -> RF
 classification -> tracker) over every frame, and writes:
   - one CSV row per (frame, live track): positions, velocity, class votes,
     hits, coasting, confirmation, and the running unique-particle counts.
@@ -9,9 +9,9 @@ classification -> tracker) over every frame, and writes:
     frames_missing, plus the frame number and running counts.
 
 Usage:
-    uv run debug_tracker.py amorfas.mp4
-    uv run debug_tracker.py amorfas.mp4 --out debug_amorfas.csv --video-out debug_amorfas.mp4
-    uv run debug_tracker.py amorfas.mp4 --no-video   (CSV only, faster)
+    uv run debug_tracker.py amorfas.mp4 --background fondo.jpg
+    uv run debug_tracker.py amorfas.mp4 --background fondo.jpg --out debug_amorfas.csv --video-out debug_amorfas.mp4
+    uv run debug_tracker.py amorfas.mp4 --background fondo.jpg --no-video   (CSV only, faster)
 """
 
 import argparse
@@ -21,9 +21,11 @@ from pathlib import Path
 import cv2
 
 from config import TrackerConfig
-from detector_v2 import CLASS_COLORS, CLASS_LABELS, ChannelSegmentationConfig, classify_frame
+from detector_v3 import (CLASS_COLORS, CLASS_LABELS,
+                         BackgroundSegmentationConfig, classify_frame_v3)
 from rf_classifier import load_if_available
-from tracker import Track, Tracker
+from tracker import Tracker
+from utils import EdgeCropPx, crop_top_bottom_strips
 
 CSV_COLUMNS = [
     "frame", "n_detections", "track_id", "x", "y", "vx", "vy",
@@ -64,7 +66,8 @@ def debug_annotate(frame_bgr, frame_idx: int, particles, tracker: Tracker):
 
 
 def run(video_path: Path, model_path: Path, out_path: Path,
-        video_out_path: Path | None, cfg: ChannelSegmentationConfig) -> None:
+        video_out_path: Path | None, background_bgr,
+        cfg: BackgroundSegmentationConfig) -> None:
     classifier = load_if_available(model_path)
     if classifier is None:
         raise FileNotFoundError(
@@ -78,14 +81,18 @@ def run(video_path: Path, model_path: Path, out_path: Path,
     width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
 
+    cropped_height = max(1, height - EdgeCropPx.TOP - EdgeCropPx.BOTTOM)
+
     video_writer = None
     if video_out_path is not None:
         video_out_path.parent.mkdir(parents=True, exist_ok=True)
         fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-        video_writer = cv2.VideoWriter(str(video_out_path), fourcc, fps, (width, height))
+        video_writer = cv2.VideoWriter(
+            str(video_out_path), fourcc, fps, (width, cropped_height))
 
-    Track._next_id = 1
     tracker = Tracker(TrackerConfig())
+    background_bgr = crop_top_bottom_strips(background_bgr)
+    background_g = background_bgr[:, :, 1]
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     frame_idx = 0
@@ -99,7 +106,10 @@ def run(video_path: Path, model_path: Path, out_path: Path,
                 if not ok:
                     break
 
-                particles = classify_frame(frame, classifier, cfg)
+                # Recorte de bordes ni bien se recibe el frame: esas areas
+                # no deben entrar ni a la clasificacion ni al tracker.
+                frame = crop_top_bottom_strips(frame)
+                particles = classify_frame_v3(frame, background_bgr, classifier, cfg, background_g)
                 tracker.update(particles)
 
                 for t in tracker.tracks:
@@ -130,10 +140,11 @@ def run(video_path: Path, model_path: Path, out_path: Path,
 
 
 def parse_args() -> argparse.Namespace:
-    defaults = ChannelSegmentationConfig()
     parser = argparse.ArgumentParser(
         description="Exporta un CSV y un video anotado del comportamiento del tracker.")
     parser.add_argument("video", type=Path, help="Ruta del video a procesar")
+    parser.add_argument("--background", type=Path, required=True,
+                        help="Imagen de fondo (agua limpia, sin particulas)")
     parser.add_argument("--model", type=Path, default=Path("rf_model.joblib"))
     parser.add_argument("--out", type=Path, default=None,
                         help="CSV de salida (default: debug_<video>.csv)")
@@ -141,9 +152,6 @@ def parse_args() -> argparse.Namespace:
                         help="Video anotado de salida (default: debug_<video>.mp4)")
     parser.add_argument("--no-video", action="store_true",
                         help="No generar el video anotado, solo el CSV")
-    parser.add_argument("--green-thresh", type=int, default=defaults.green_thresh)
-    parser.add_argument("--min-area", type=float, default=defaults.min_area)
-    parser.add_argument("--max-area", type=float, default=defaults.max_area)
     return parser.parse_args()
 
 
@@ -153,11 +161,11 @@ def main() -> None:
     video_out_path = None
     if not args.no_video:
         video_out_path = args.video_out or Path(f"debug_{args.video.stem}.mp4")
-    cfg = ChannelSegmentationConfig(
-        green_thresh=args.green_thresh,
-        min_area=args.min_area,
-        max_area=args.max_area)
-    run(args.video, args.model, out_path, video_out_path, cfg)
+    background = cv2.imread(str(args.background))
+    if background is None:
+        raise IOError(f"Could not load background: {args.background}")
+    run(args.video, args.model, out_path, video_out_path, background,
+        BackgroundSegmentationConfig())
 
 
 if __name__ == "__main__":
