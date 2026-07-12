@@ -1,16 +1,9 @@
-"""Inference-time Random Forest particle classifier.
-
-Loads the model trained by train_rf.py and classifies a particle from its
-feature dict. The feature vector is rebuilt in the exact order stored with
-the model, so it stays consistent even if FEATURE_NAMES changes later.
-"""
-
 from pathlib import Path
 
 import joblib
 import numpy as np
 
-DEFAULT_MODEL_PATH = Path("rf_model.joblib")
+DEFAULT_MODEL_PATH = Path(__file__).resolve().parent / "rf_model.joblib"
 
 
 class RandomForestParticleClassifier:

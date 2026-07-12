@@ -6,7 +6,7 @@ No directional flow: counting is done via unique IDs, not a crossing
 line, since particles float erratically.
 
 Decoupled from the detector: it consumes any object exposing a `centroid`
-(x, y) and a `label` string (e.g. detector_v3.ClassifiedParticle), so the
+(x, y) and a `label` string (e.g. detector.ClassifiedParticle), so the
 class labels come straight from the Random Forest ("fiber"/"amorphous").
 """
 
