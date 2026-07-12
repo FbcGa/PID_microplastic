@@ -18,12 +18,14 @@ class EdgeCropPx(IntEnum):
     BOTTOM = 100
 
 
-def crop_top_bottom_strips(frame: np.ndarray) -> np.ndarray:
+def crop_top_bottom_strips(frame: np.ndarray, top: int = int(EdgeCropPx.TOP),
+                           bottom: int = int(EdgeCropPx.BOTTOM)) -> np.ndarray:
     """Frame with its top and bottom edges removed (EdgeCropPx.TOP /
-    EdgeCropPx.BOTTOM), full width, returning the remaining middle band."""
+    EdgeCropPx.BOTTOM by default), full width, returning the remaining
+    middle band. top/bottom can be overridden (e.g. live calibration)."""
     h = frame.shape[0]
-    top = min(EdgeCropPx.TOP, h)
-    bottom = min(EdgeCropPx.BOTTOM, h - top)
+    top = min(top, h)
+    bottom = min(bottom, h - top)
     return frame[top:h - bottom, :]
 
 
