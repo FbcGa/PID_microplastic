@@ -38,6 +38,23 @@ class ClassifiedParticle:
         x, y, w, h = self.bbox
         return x + w // 2, y + h // 2
 
+@dataclass(frozen=True)
+class BackgroundSegmentationConfig:
+    # Umbral sobre |frame_g - fondo_g|: pixel con diferencia por encima = particula
+    diff_thresh: int = 5
+    # Blur previo al umbral, reduce ruido de sensor
+    blur_ksize: int = 3
+    # Apertura: quita puntos sueltos de ruido
+    open_ksize: int = 1
+    # Cierre: une fragmentos rotos de una misma fibra
+    close_ksize: int = 5
+    # Filtro de tamano (px^2) — provisional hasta la calibracion um -> px
+    min_area: float = 200.0
+    max_area: float = 8000.0
+    # Circularidad = 4*pi*Area/Perimetro^2. Blobs con circularidad >=
+    # max_circularity se descartan por ser burbujas.
+    max_circularity: float = 0.8
+
 
 def extract_contours(mask: np.ndarray) -> list[np.ndarray]:
     # RETR_CCOMP + top-level filter: keeps particles inside ring holes
@@ -97,24 +114,6 @@ def show_original(frame_bgr: np.ndarray) -> None:
     ax.imshow(frame_rgb)
     ax.set_title("Original")
     fig.tight_layout()
-
-
-@dataclass(frozen=True)
-class BackgroundSegmentationConfig:
-    # Umbral sobre |frame_g - fondo_g|: pixel con diferencia por encima = particula
-    diff_thresh: int = 12
-    # Blur previo al umbral, reduce ruido de sensor
-    blur_ksize: int = 3
-    # Apertura: quita puntos sueltos de ruido
-    open_ksize: int = 1
-    # Cierre: une fragmentos rotos de una misma fibra
-    close_ksize: int = 5
-    # Filtro de tamano (px^2) — provisional hasta la calibracion um -> px
-    min_area: float = 200.0
-    max_area: float = 8000.0
-    # Circularidad = 4*pi*Area/Perimetro^2. Blobs con circularidad >=
-    # max_circularity se descartan por ser burbujas.
-    max_circularity: float = 0.8
 
 
 def segment_against_background(frame_bgr: np.ndarray, background_bgr: np.ndarray,
