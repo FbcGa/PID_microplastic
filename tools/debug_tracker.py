@@ -25,10 +25,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from config import TrackerConfig
 from detector import (CLASS_COLORS, CLASS_LABELS,
-                      BackgroundSegmentationConfig, classify_frame_v3)
+                      BackgroundSegmentationConfig, classify_frame)
 from random_forest.rf_classifier import load_if_available
 from tracker import Tracker
-from utils import EdgeCropPx, crop_top_bottom_strips
+from cropping import EdgeCropPx, crop_top_bottom_strips
 
 CSV_COLUMNS = [
     "frame", "n_detections", "track_id", "x", "y", "vx", "vy",
@@ -112,7 +112,7 @@ def run(video_path: Path, model_path: Path, out_path: Path,
                 # Recorte de bordes ni bien se recibe el frame: esas areas
                 # no deben entrar ni a la clasificacion ni al tracker.
                 frame = crop_top_bottom_strips(frame)
-                particles = classify_frame_v3(frame, background_bgr, classifier, cfg, background_g)
+                particles = classify_frame(frame, background_bgr, classifier, cfg, background_g)
                 tracker.update(particles)
 
                 for t in tracker.tracks:

@@ -21,10 +21,10 @@ from pathlib import Path
 import cv2
 
 from config import TrackerConfig
-from detector import BackgroundSegmentationConfig, classify_frame_v3
+from detector import BackgroundSegmentationConfig, classify_frame
 from random_forest.rf_classifier import load_if_available
 from tracker import Tracker
-from utils import crop_top_bottom_strips
+from cropping import crop_top_bottom_strips
 from visualization import annotate
 
 WINDOW = "Microplasticos - deteccion / clasificacion / tracking"
@@ -59,7 +59,7 @@ def run(video_path: str, model_path: Path, background_bgr,
                 # Recorte de bordes ni bien se recibe el frame: esas areas
                 # no deben entrar ni a la clasificacion ni al tracker.
                 frame = crop_top_bottom_strips(frame)
-                particles = classify_frame_v3(frame, background_bgr, classifier, cfg, background_g)
+                particles = classify_frame(frame, background_bgr, classifier, cfg, background_g)
                 tracks = tracker.update(particles)
                 if display:
                     cv2.imshow(WINDOW, annotate(frame, particles, tracks, tracker))
