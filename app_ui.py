@@ -26,6 +26,7 @@ class Callbacks:
     on_save_calibration: Callable[[], None]
     on_start: Callable[[], None]
     on_stop: Callable[[], None]
+    on_close: Callable[[], None]
 
 
 class App:
@@ -98,6 +99,12 @@ class App:
 
         self._calib_panel = tk.Frame(panel)
         self._build_calibration_panel(self._calib_panel, btn_font)
+
+        # Fullscreen sin barra de titulo: el unico camino tactil para
+        # cerrar la app es este boton, anclado abajo del panel.
+        tk.Button(panel, text="Salir", font=btn_font, height=2, fg="red",
+                  command=self._cb.on_close).pack(side="bottom", fill="x",
+                                                  padx=8, pady=8)
 
         root.after(POLL_MS, self._poll_queue)
 

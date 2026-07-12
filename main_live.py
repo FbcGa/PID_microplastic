@@ -72,6 +72,11 @@ def main() -> None:
     def on_stop() -> None:
         worker.set_mode(Mode.IDLE)
 
+    def on_close() -> None:
+        worker.stop()
+        camera.stop()
+        root.destroy()
+
     callbacks = Callbacks(
         on_calibrate=on_calibrate,
         on_crop_change=on_crop_change,
@@ -79,15 +84,11 @@ def main() -> None:
         on_save_calibration=on_save_calibration,
         on_start=on_start,
         on_stop=on_stop,
+        on_close=on_close,
     )
 
     app = App(root, worker.results, callbacks, calibration.crop_top,
               calibration.crop_bottom, background_exists=BACKGROUND_PATH.exists())
-
-    def on_close() -> None:
-        worker.stop()
-        camera.stop()
-        root.destroy()
 
     root.protocol("WM_DELETE_WINDOW", on_close)
     root.mainloop()
