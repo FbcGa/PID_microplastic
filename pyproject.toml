@@ -11,4 +11,5 @@ dependencies = [
     "pillow>=11.0.0",
     "scikit-learn>=1.5",
     "scipy>=1.13.0",
+    "simplejpeg>=1.7.0",
 ]

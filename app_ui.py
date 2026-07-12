@@ -15,6 +15,7 @@ from processing import FrameResult, Mode
 
 POLL_MS = 33
 CROP_STEP = 5
+PANEL_WIDTH = 260
 
 
 @dataclass
@@ -39,15 +40,40 @@ class App:
         self._photo: ImageTk.PhotoImage | None = None  # referencia viva, Tkinter la descarta si no
 
         root.title("Microplasticos - captura en vivo")
+        # Geometria clavada a la pantalla (7'' = 800x480 en la Pi) ademas
+        # del fullscreen: sin maxsize/resizable(False) el WM puede seguir
+        # agrandando la ventana si algun widget pide mas espacio.
+        screen_w = root.winfo_screenwidth()
+        screen_h = root.winfo_screenheight()
+        root.geometry(f"{screen_w}x{screen_h}+0+0")
+        root.resizable(False, False)
+        root.maxsize(screen_w, screen_h)
         root.attributes("-fullscreen", True)
         root.grid_columnconfigure(0, weight=1)
         root.grid_rowconfigure(0, weight=1)
 
-        self._video_label = tk.Label(root, bg="black")
-        self._video_label.grid(row=0, column=0, sticky="nsew")
+        self._video_w = screen_w - PANEL_WIDTH
+        self._video_h = screen_h
 
-        panel = tk.Frame(root, width=260)
+        # Frame de tamano fijo (grid_propagate(False)) para que el video no
+        # arrastre el tamano de la ventana: sin esto, un Label crece para
+        # ajustarse a su imagen, lo que agranda la celda, lo que en el
+        # proximo poll se lee como un tamano mayor -> bucle de crecimiento
+        # infinito de la ventana.
+        video_frame = tk.Frame(root, bg="black",
+                               width=self._video_w, height=self._video_h)
+        video_frame.grid(row=0, column=0, sticky="nsew")
+        video_frame.grid_propagate(False)
+
+        self._video_label = tk.Label(video_frame, bg="black")
+        # place() no propaga el tamano del hijo al padre (a diferencia de
+        # pack/grid), asi que el label puede mostrar cualquier imagen sin
+        # afectar el tamano fijo de video_frame.
+        self._video_label.place(relx=0.5, rely=0.5, anchor="center")
+
+        panel = tk.Frame(root, width=PANEL_WIDTH)
         panel.grid(row=0, column=1, sticky="ns")
+        panel.grid_propagate(False)
 
         btn_font = ("Arial", 16, "bold")
         self._btn_calibrate = tk.Button(panel, text="Calibracion", font=btn_font,
@@ -146,12 +172,12 @@ class App:
         frame_rgb = cv2.cvtColor(result.frame_bgr, cv2.COLOR_BGR2RGB)
         image = Image.fromarray(frame_rgb)
 
-        label_w = self._video_label.winfo_width()
-        label_h = self._video_label.winfo_height()
-        if label_w > 1 and label_h > 1:
-            scale = min(label_w / image.width, label_h / image.height)
-            new_size = (max(1, int(image.width * scale)), max(1, int(image.height * scale)))
-            image = image.resize(new_size)
+        # Escala contra el tamano fijo de video_frame (no el del label): el
+        # label sigue el tamano de su imagen, asi que usar su propio
+        # winfo_width/height como objetivo crea un bucle de crecimiento.
+        scale = min(self._video_w / image.width, self._video_h / image.height)
+        new_size = (max(1, int(image.width * scale)), max(1, int(image.height * scale)))
+        image = image.resize(new_size)
 
         self._photo = ImageTk.PhotoImage(image)
         self._video_label.configure(image=self._photo)
