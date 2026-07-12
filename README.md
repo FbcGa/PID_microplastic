@@ -30,11 +30,17 @@ Genera `frames/<nombre_video>/frame_*.jpg`.
 ### 2. Etiquetar partículas (construir el dataset)
 
 ```bash
-uv run label_particles.py                # frames/ -> dataset.csv
+uv run label_particles.py --background frames/fondo.jpg                     # frames/ -> dataset.csv
+uv run label_particles.py --background frames/fondo.jpg --frames frames/30_20260709_013216   # solo esa carpeta
 ```
 
-Segmenta cada frame con el método de `detector_v2.py` y muestra cada
-partícula resaltada para etiquetarla con el teclado:
+`--frames` acepta cualquier carpeta (busca recursivamente adentro), así que
+sirve para etiquetar solo los frames de un video/subcarpeta puntual en vez
+de todo `frames/`.
+
+Segmenta cada frame con el método de `detector_v3.py` (resta contra una
+imagen de fondo) y muestra cada partícula resaltada para etiquetarla con
+el teclado:
 
 | Tecla | Acción |
 |---|---|
@@ -60,9 +66,9 @@ de features.
 ### 4. Detectar y clasificar sobre un frame
 
 ```bash
-uv run detector_v2.py frames/frame2.jpg
-uv run detector_v2.py frames/frame2.jpg --green-thresh 100 --min-area 200
-uv run detector_v2.py frames/frame2.jpg --no-classify   # solo contornos
+uv run detector_v3.py frames/frame2.jpg --background frames/fondo.jpg
+uv run detector_v3.py frames/frame2.jpg --background frames/fondo.jpg --no-classify   # solo contornos
+uv run detector_v3.py frames/frame2.jpg --background frames/fondo.jpg --debug-stages  # ver cada etapa del pipeline
 ```
 
 Si existe `rf_model.joblib`, dibuja cada contorno con el color de su clase
@@ -71,9 +77,10 @@ filtro de área (verde = aceptado, rojo = descartado).
 
 ## Métodos de segmentación
 
-- **`detector_v2.py`** — umbral sobre el canal verde (`G < umbral`,
-  portado de un script MATLAB validado). Es el método usado por el
-  etiquetado y la clasificación actuales.
+- **`detector_v3.py`** — resta contra una imagen de fondo real (agua
+  limpia, sin partículas) en el canal verde: `absdiff` + blur + umbral +
+  apertura/cierre morfológico. Es el método usado por el etiquetado y la
+  clasificación actuales; requiere pasar `--background` con esa imagen.
 - **`detector.py`** — oscuridad local: fondo local estimado con box blur,
   binarización de `fondo - frame` y filtros heurísticos de burbujas
   (borde desenfocado, anillo brillante). Modo legacy `background`
@@ -91,7 +98,7 @@ filtro de área (verde = aceptado, rojo = descartado).
 | `features.py` | Extracción de descriptores — única fuente de verdad del vector de features (entrenamiento e inferencia) |
 | `train_rf.py` | Entrenamiento y evaluación del Random Forest |
 | `rf_classifier.py` | Clasificador en inferencia (carga `rf_model.joblib`) |
-| `detector_v2.py` | Segmentación por canal verde + clasificación RF |
+| `detector_v3.py` | Segmentación por resta contra fondo + clasificación RF |
 | `detector.py` | Segmentación por oscuridad local + filtros de burbujas |
 | `dataset.csv` | Dataset etiquetado (generado) |
 | `rf_model.joblib` | Modelo entrenado (generado) |
@@ -105,6 +112,6 @@ El orden canónico está en `features.FEATURE_NAMES`.
 
 ## Notas
 
-- `main.py` (reproducción de video con tracking) está desactualizado:
-  importa `tracker`, `video_source` y `visualizer`, módulos ya eliminados.
-  El flujo vigente es el de frames sueltos descrito arriba.
+- `main.py` (detección + clasificación + tracking en vivo sobre un video)
+  y `debug_tracker.py` (log frame a frame para depurar el tracker) también
+  requieren `--background <imagen_fondo>`.

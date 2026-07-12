@@ -1,12 +1,14 @@
-"""Extract frames from a folder of videos into images for PDI testing.
+"""Extract frames from a video (or a folder of videos) into images for PDI testing.
 
-Reads every video in the input folder and writes frames as JPGs into a
-per-video subfolder of the output folder (frames/<video_name>/frame_*.jpg).
+Reads a single video, or every video in a folder, and writes frames as JPGs
+into a per-video subfolder of the output folder (frames/<video_name>/frame_*.jpg).
 By default it samples one frame per second; use --every to sample by frame
 count, or --max-per-video to cap how many are written.
 
 Usage:
     uv run get_frames.py                       (videos/ -> frames/, 1 fps)
+    uv run get_frames.py mi_video.mp4          (un solo video -> frames/)
+    uv run get_frames.py mi_video.mp4 --out salida/
     uv run get_frames.py --every 30            (one frame every 30 frames)
     uv run get_frames.py --fps 2               (two frames per second)
     uv run get_frames.py --max-per-video 20    (at most 20 frames per video)
@@ -46,10 +48,13 @@ def extract_video(path: Path, out_dir: Path, every: int | None,
     saved = 0
     index = 0
     while True:
-        ok, frame = cap.read()
+        ok = cap.grab()
         if not ok:
             break
         if index % step == 0:
+            ok, frame = cap.retrieve()
+            if not ok:
+                break
             out_path = video_dir / f"frame_{index:06d}.jpg"
             cv2.imwrite(str(out_path), frame)
             saved += 1
@@ -64,7 +69,9 @@ def extract_video(path: Path, out_dir: Path, every: int | None,
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Extrae frames de una carpeta de videos.")
+        description="Extrae frames de un video o de una carpeta de videos.")
+    parser.add_argument("video", type=Path, nargs="?", default=None,
+                        help="Ruta a un solo video a procesar (ignora --videos)")
     parser.add_argument("--videos", type=Path, default=Path("videos"),
                         help="Carpeta con los videos (default: videos/)")
     parser.add_argument("--out", type=Path, default=Path("frames"),
@@ -81,16 +88,23 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
-    if not args.videos.is_dir():
-        raise IOError(f"No existe la carpeta de videos: {args.videos}")
 
-    videos = sorted(p for p in args.videos.iterdir()
-                    if p.suffix.lower() in VIDEO_EXTENSIONS)
-    if not videos:
-        raise IOError(f"No se encontraron videos en: {args.videos}")
+    if args.video is not None:
+        if not args.video.is_file():
+            raise IOError(f"No existe el video: {args.video}")
+        videos = [args.video]
+        origen = args.video
+    else:
+        if not args.videos.is_dir():
+            raise IOError(f"No existe la carpeta de videos: {args.videos}")
+        videos = sorted(p for p in args.videos.iterdir()
+                        if p.suffix.lower() in VIDEO_EXTENSIONS)
+        if not videos:
+            raise IOError(f"No se encontraron videos en: {args.videos}")
+        origen = args.videos
 
     args.out.mkdir(parents=True, exist_ok=True)
-    print(f"{len(videos)} video(s) en {args.videos} -> {args.out}")
+    print(f"{len(videos)} video(s) en {origen} -> {args.out}")
 
     total = 0
     for path in videos:

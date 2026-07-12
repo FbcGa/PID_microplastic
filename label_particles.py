@@ -1,9 +1,9 @@
 """Interactive per-particle labeling tool to build the training dataset.
 
-Runs detector_v2's segmentation over every frame under a folder, then for
-each detected particle shows it highlighted and waits for a keypress to
-label it. Each labeled particle becomes one row (its feature vector + label)
-in dataset.csv.
+Runs detector_v3's segmentation (resta contra una imagen de fondo) over
+every frame under a folder, then for each detected particle shows it
+highlighted and waits for a keypress to label it. Each labeled particle
+becomes one row (its feature vector + label) in dataset.csv.
 
 Keys:
     f   fiber (fibra)
@@ -14,8 +14,8 @@ Keys:
     q   quit and save
 
 Usage:
-    uv run label_particles.py                    (frames/ -> dataset.csv)
-    uv run label_particles.py --frames otra/ --out mi_dataset.csv
+    uv run label_particles.py --background frames/fondo.jpg
+    uv run label_particles.py --background frames/fondo.jpg --frames otra/ --out mi_dataset.csv
 """
 
 import argparse
@@ -25,9 +25,10 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from detector_v2 import (ChannelSegmentationConfig, extract_contours,
-                         filter_by_area, segment_channels)
+from detector_v3 import (BackgroundSegmentationConfig, extract_contours,
+                         filter_by_area, segment_against_background)
 from features import FEATURE_NAMES, extract_features, feature_vector
+from utils import crop_top_bottom_strips
 
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp"}
 LABEL_KEYS = {ord("f"): "fiber", ord("a"): "amorphous"}
@@ -44,21 +45,26 @@ def find_frames(frames_dir: Path) -> list[Path]:
                   if p.suffix.lower() in IMAGE_EXTENSIONS)
 
 
-def detect_particles(frame_bgr: np.ndarray, cfg: ChannelSegmentationConfig
+def detect_particles(frame_bgr: np.ndarray, background_bgr: np.ndarray,
+                     cfg: BackgroundSegmentationConfig
                      ) -> tuple[list[np.ndarray], np.ndarray]:
-    """(kept contours, green channel) for one frame, via detector_v2."""
-    stages = segment_channels(frame_bgr, cfg.green_thresh)
+    """(kept contours, green channel) for one frame, via detector_v3."""
+    stages = segment_against_background(frame_bgr, background_bgr, cfg)
     kept, _discarded = filter_by_area(
-        extract_contours(stages["mascara_g"]), cfg.min_area, cfg.max_area)
+        extract_contours(stages["mascara_g"]), cfg.min_area, cfg.max_area,
+        cfg.max_circularity)
     return kept, stages["canal_g"]
 
 
-def already_labeled(csv_path: Path) -> set[str]:
-    """source_frame values already in the CSV, to skip on resume."""
+def already_labeled(csv_path: Path) -> set[tuple[str, int]]:
+    """(source_frame, blob_id) pairs already in the CSV, to skip on resume.
+    Per-particle rather than per-frame: quitting mid-frame must not lose
+    the remaining unlabeled particles of that frame."""
     if not csv_path.exists():
         return set()
     with csv_path.open(newline="") as f:
-        return {row["source_frame"] for row in csv.DictReader(f)}
+        return {(row["source_frame"], int(row["blob_id"]))
+                for row in csv.DictReader(f)}
 
 
 def _open_writer(csv_path: Path):
@@ -97,7 +103,7 @@ def _render(frame_bgr: np.ndarray, contours: list[np.ndarray], current: int,
 
 
 def run(frames_dir: Path, csv_path: Path, merged_dir: Path,
-        cfg: ChannelSegmentationConfig) -> None:
+        background_bgr: np.ndarray, cfg: BackgroundSegmentationConfig) -> None:
     frames = find_frames(frames_dir)
     if not frames:
         raise IOError(f"No se encontraron imagenes en: {frames_dir}")
@@ -107,18 +113,27 @@ def run(frames_dir: Path, csv_path: Path, merged_dir: Path,
     window = "Etiquetado (f=fibra a=amorfa s=saltar x=cruzado q=salir)"
     counts = {"fiber": 0, "amorphous": 0, "skipped": 0, "merged": 0}
 
+    background_shape = background_bgr.shape
+    background_bgr = crop_top_bottom_strips(background_bgr)
+
     try:
         for frame_path in frames:
             source = frame_path.relative_to(frames_dir).as_posix()
-            if source in done:
-                continue
             frame = cv2.imread(str(frame_path))
             if frame is None:
                 print(f"  ! no se pudo leer: {source}")
                 continue
+            if frame.shape != background_shape:
+                print(f"  ! tamano distinto al fondo, se salta: {source}")
+                continue
+            # Recorte de bordes ni bien se recibe el frame: mismas areas
+            # que descarta el pipeline de deteccion en produccion.
+            frame = crop_top_bottom_strips(frame)
 
-            contours, gray = detect_particles(frame, cfg)
+            contours, gray = detect_particles(frame, background_bgr, cfg)
             for blob_id, contour in enumerate(contours):
+                if (source, blob_id) in done:
+                    continue
                 cv2.imshow(window, _render(frame, contours, blob_id))
                 key = cv2.waitKey(0) & 0xFF
 
@@ -161,6 +176,8 @@ def _save_merged(frame_bgr: np.ndarray, contour: np.ndarray, merged_dir: Path,
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Etiquetado por particula para el dataset de Random Forest.")
+    parser.add_argument("--background", type=Path, required=True,
+                        help="Imagen de fondo (agua limpia, sin particulas)")
     parser.add_argument("--frames", type=Path, default=Path("frames"),
                         help="Carpeta con los frames (default: frames/)")
     parser.add_argument("--out", type=Path, default=Path("dataset.csv"),
@@ -172,7 +189,10 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
-    run(args.frames, args.out, args.merged, ChannelSegmentationConfig())
+    background = cv2.imread(str(args.background))
+    if background is None:
+        raise IOError(f"Could not load background: {args.background}")
+    run(args.frames, args.out, args.merged, background, BackgroundSegmentationConfig())
 
 
 if __name__ == "__main__":

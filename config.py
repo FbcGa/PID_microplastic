@@ -62,9 +62,9 @@ class DetectionConfig:
 @dataclass(frozen=True)
 class TrackerConfig:
     # Max distance (px) between predicted position and detection to match
-    max_distance: float = 80.0
+    max_distance: float = 400.0
     # Frames a track survives without being seen (~0.3 s at 30 FPS)
-    max_missed: int = 10
+    max_missed: int = 5
     # Frames seen before a track is confirmed (and counted)
     min_hits: int = 2
     # EMA smoothing of the velocity
