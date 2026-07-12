@@ -2,12 +2,13 @@
 
 Single source of truth for the feature vector: the same `extract_features`
 is used both to build the training dataset (label_particles.py) and at
-inference time (rf_classifier.py / detector_v3.py), so features can never
+inference time (rf_classifier.py / detector.py), so features can never
 be computed differently between training and prediction.
 
-Shape descriptors dominate the fiber-vs-amorphous distinction; a few cheap
-intensity descriptors are included as secondary signal. Random Forest
-splits on thresholds, so no scaling/normalization is needed.
+Pure shape descriptors: area, equivalent_diameter, hu_3/5/6/7 and the
+intensity descriptors (mean_intensity, std_intensity, peak_darkness) were
+dropped for near-zero importance in the trained Random Forest. Random
+Forest splits on thresholds, so no scaling/normalization is needed.
 """
 
 import cv2
@@ -16,30 +17,20 @@ import numpy as np
 # Canonical order of the feature vector. Any consumer (training, inference)
 # must build the vector in exactly this order.
 FEATURE_NAMES: list[str] = [
-    "area",
     "perimeter",
     "aspect_ratio",
     "circularity",
     "solidity",
     "extent",
     "mean_width",
-    "equivalent_diameter",
     "eccentricity",
     "elongation",
-    "hu_1", "hu_2", "hu_3", "hu_4", "hu_5", "hu_6", "hu_7",
-    "mean_intensity",
-    "std_intensity",
-    "peak_darkness",
+    "hu_1", "hu_2", "hu_4",
 ]
 
 
-def extract_features(contour: np.ndarray, gray: np.ndarray) -> dict[str, float]:
-    """Descriptors for one contour over a grayscale image.
-
-    `gray` is the single-channel image the intensity descriptors are read
-    from (e.g. the green channel detector_v3 segments on, or a BGR->GRAY
-    conversion). Returns a dict keyed by FEATURE_NAMES.
-    """
+def extract_features(contour: np.ndarray) -> dict[str, float]:
+    """Shape descriptors for one contour. Returns a dict keyed by FEATURE_NAMES."""
     area = float(cv2.contourArea(contour))
     perimeter = float(cv2.arcLength(contour, True))
     x, y, w, h = cv2.boundingRect(contour)
@@ -51,7 +42,6 @@ def extract_features(contour: np.ndarray, gray: np.ndarray) -> dict[str, float]:
 
     circularity = (4 * np.pi * area / perimeter ** 2) if perimeter > 0 else 0.0
     mean_width = (2 * area / perimeter) if perimeter > 0 else 0.0
-    equivalent_diameter = float(np.sqrt(4 * area / np.pi)) if area > 0 else 0.0
 
     hull_area = float(cv2.contourArea(cv2.convexHull(contour)))
     solidity = area / hull_area if hull_area > 0 else 0.0
@@ -60,24 +50,17 @@ def extract_features(contour: np.ndarray, gray: np.ndarray) -> dict[str, float]:
     eccentricity, elongation = _ellipse_features(contour)
 
     hu = _hu_moments(contour)
-    mean_i, std_i, peak_dark = _intensity_features(contour, gray, (x, y, w, h))
 
     return {
-        "area": area,
         "perimeter": perimeter,
         "aspect_ratio": aspect_ratio,
         "circularity": circularity,
         "solidity": solidity,
         "extent": extent,
         "mean_width": mean_width,
-        "equivalent_diameter": equivalent_diameter,
         "eccentricity": eccentricity,
         "elongation": elongation,
-        "hu_1": hu[0], "hu_2": hu[1], "hu_3": hu[2], "hu_4": hu[3],
-        "hu_5": hu[4], "hu_6": hu[5], "hu_7": hu[6],
-        "mean_intensity": mean_i,
-        "std_intensity": std_i,
-        "peak_darkness": peak_dark,
+        "hu_1": hu[0], "hu_2": hu[1], "hu_4": hu[3],
     }
 
 
@@ -116,24 +99,3 @@ def _hu_moments(contour: np.ndarray) -> list[float]:
         else:
             out.append(float(-np.sign(value) * np.log10(abs(value))))
     return out
-
-
-def _intensity_features(contour: np.ndarray, gray: np.ndarray,
-                        bbox: tuple[int, int, int, int]
-                        ) -> tuple[float, float, float]:
-    """(mean, std, peak_darkness) over the filled blob.
-
-    peak_darkness = how much darker than the blob's mean its darkest pixel
-    is; a cheap sharpness/contrast cue. Computed only over the bounding box
-    for speed."""
-    x, y, w, h = bbox
-    roi = gray[y:y + h, x:x + w]
-    filled = np.zeros((h, w), np.uint8)
-    cv2.drawContours(filled, [contour - (x, y)], -1, 255, -1)
-    values = roi[filled > 0]
-    if values.size == 0:
-        return 0.0, 0.0, 0.0
-    mean = float(values.mean())
-    std = float(values.std())
-    peak_darkness = float(mean - values.min())
-    return mean, std, peak_darkness

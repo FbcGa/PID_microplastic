@@ -1,319 +1,263 @@
-"""Detection and classification of microplastics via local-darkness segmentation.
+"""Background-reference segmentation: absdiff against a captured clean-water
+image on the green channel, for cases where a fixed global threshold can't
+separate particle from background (e.g. thin fibers whose G value overlaps
+the background's).
 
-Pipeline: gray -> blur -> local background (box blur) -> darkness
-(background - frame) -> binary threshold -> morphology (open/close) ->
-contours -> features -> classification.
-
-Stateless per frame (no reference background), so it works live and on
-still images. The legacy "background" mode (absdiff against a reference
-frame) is kept behind config.segmentation_mode for comparison.
-
-Usage (single-frame viewer):
-    uv run detector.py frames/frame2.jpg
+Usage:
+    uv run detector.py frames/frame2.jpg --background frames/fondo.jpg
 """
 
 import argparse
 from dataclasses import dataclass
-from enum import Enum
 
 import cv2
 import numpy as np
 
-from config import DetectionConfig
+from config import BackgroundSegmentationConfig
+from features import extract_features
+from random_forest.rf_classifier import RandomForestParticleClassifier, load_if_available
+from utils import crop_top_bottom_strips
 
-
-class ParticleClass(Enum):
-    FIBER = "fiber"
-    AMORPHOUS = "amorphous"
-    BUBBLE = "bubble"
+# Colores por clase (BGR): fibra naranja, amorfa verde
+CLASS_COLORS: dict[str, tuple[int, int, int]] = {
+    "fiber": (0, 165, 255),
+    "amorphous": (0, 255, 0),
+}
+CLASS_LABELS = {"fiber": "fibra", "amorphous": "amorfa"}
 
 
 @dataclass(frozen=True)
-class Detection:
-    particle_class: ParticleClass
+class ClassifiedParticle:
+    """One detected+classified particle. Exposes the centroid and label the
+    tracker needs, plus the contour for drawing."""
     contour: np.ndarray
+    label: str  # "fiber" | "amorphous"
     bbox: tuple[int, int, int, int]  # x, y, w, h
-    area: float
-    aspect_ratio: float
-    circularity: float
-    intensity: float        # mean brightness over the filled blob
-    core_intensity: float   # mean brightness of the eroded interior
-    rim_intensity: float    # mean brightness of the outer band
-    peak_darkness: float    # max value in the darkness image inside the blob
-    mean_width: float       # 2*area/perimeter: mean thickness of the blob
-    ring_spread: float      # p95 - p50 of the gray ring around the blob:
-                            # high = bright glare on one side (bubble border)
 
     @property
     def centroid(self) -> tuple[int, int]:
         x, y, w, h = self.bbox
         return x + w // 2, y + h // 2
 
-
-@dataclass(frozen=True)
-class DetectionResult:
-    particles: list[Detection]      # fibers and amorphous only
-    discarded_bubbles: int
-    mask: np.ndarray
-
-    def count(self, particle_class: ParticleClass) -> int:
-        return sum(1 for p in self.particles if p.particle_class == particle_class)
-
-
-class ParticleClassifier:
-    """Classification via geometric and intensity rules.
-
-    If this is later replaced by a trained model, any class exposing the
-    same `classify` method will work as a drop-in replacement.
-    """
-
-    def __init__(self, config: DetectionConfig):
-        self._cfg = config
-
-    def classify(self, area: float, aspect_ratio: float, circularity: float,
-                 core_intensity: float, rim_intensity: float,
-                 peak_darkness: float, mean_width: float,
-                 ring_spread: float) -> ParticleClass | None:
-        """Returns the particle class, or None if filtered out."""
-        cfg = self._cfg
-        if area < cfg.min_area or area > cfg.max_area:
-            return None
-        # Bubble, case 1 — closed ring: filling the contour covers the
-        # bright interior -> bright core with clearly darker rim.
-        if (core_intensity > cfg.bubble_intensity
-                and core_intensity - rim_intensity > cfg.bubble_core_margin):
-            return ParticleClass.BUBBLE
-        # Bubble, case 2 — open border: the dark band touches the bubble's
-        # bright interior (glare on one side, dark on the other). A solid
-        # particle sits on uniform background, so its ring has low spread.
-        if ring_spread > cfg.bubble_ring_spread:
-            return ParticleClass.BUBBLE
-        # Faint blobs (out of focus / noise) are only kept if they are a
-        # true fiber: long, thin, very low circularity. A real non-fiber
-        # particle in the focal plane is always sharply dark.
-        is_elongated = aspect_ratio > cfg.fiber_aspect_ratio or aspect_ratio < 1 / cfg.fiber_aspect_ratio
-        is_fiber_shaped = is_elongated or circularity < cfg.fiber_circularity
-        if peak_darkness < cfg.min_peak_darkness:
-            if not (circularity < cfg.faint_fiber_circularity
-                    and mean_width <= cfg.max_faint_width):
-                return None
-        if is_fiber_shaped:
-            return ParticleClass.FIBER
-        return ParticleClass.AMORPHOUS
+def extract_contours(mask: np.ndarray) -> list[np.ndarray]:
+    # RETR_CCOMP + top-level filter: keeps particles inside ring holes
+    # (e.g. inside a bubble halo) that RETR_EXTERNAL would drop, without
+    # duplicating the inner edge of the rings like RETR_LIST would.
+    contours, hierarchy = cv2.findContours(
+        mask, cv2.RETR_CCOMP, cv2.CHAIN_APPROX_SIMPLE)
+    if hierarchy is None:
+        return []
+    return [c for c, h in zip(contours, hierarchy[0]) if h[3] == -1]
 
 
-class MicroplasticDetector:
-    """Segments particles against a reference background and classifies them."""
+def circularity(contour: np.ndarray) -> float:
+    perimeter = cv2.arcLength(contour, True)
+    if perimeter == 0:
+        return 0.0
+    return 4 * np.pi * cv2.contourArea(contour) / (perimeter ** 2)
 
-    def __init__(self, config: DetectionConfig,
-                 classifier: ParticleClassifier | None = None):
-        self._cfg = config
-        self._classifier = classifier or ParticleClassifier(config)
-        self._kernel = np.ones(
-            (config.morphology_kernel, config.morphology_kernel), np.uint8)
-        self._background_blur: np.ndarray | None = None
 
-    def set_background(self, background_frame: np.ndarray) -> None:
-        """Registers the reference frame (clean water, no particles)."""
-        self._background_blur = self._preprocess(background_frame)
-
-    @property
-    def has_background(self) -> bool:
-        return self._background_blur is not None
-
-    def detect(self, frame: np.ndarray,
-               stages: dict[str, np.ndarray] | None = None) -> DetectionResult:
-        """Detects particles. If `stages` is given, each intermediate image
-        of the pipeline is stored in it (for visual debugging)."""
-        if (self._cfg.segmentation_mode == "background"
-                and self._background_blur is None):
-            raise RuntimeError(
-                "Background not set: call set_background() first.")
-
-        gray_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        blurred_frame = cv2.GaussianBlur(gray_frame, self._cfg.blur_kernel, 0)
-        if stages is not None:
-            stages["01_gris"] = gray_frame
-            stages["02_blur"] = blurred_frame
-        mask, darkness, local_background = self._segment(blurred_frame, stages)
-
-        contours, _ = cv2.findContours(
-            mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-
-        particles: list[Detection] = []
-        bubble_boxes: list[tuple[int, int, int, int]] = []
-        for contour in contours:
-            detection = self._analyze_contour(
-                contour, gray_frame, darkness, local_background)
-            if detection is None:
-                continue
-            if detection.particle_class is ParticleClass.BUBBLE:
-                bubble_boxes.append(detection.bbox)
-            else:
-                particles.append(detection)
-
-        # A dark fragment next to a bubble belongs to the same border:
-        # anything within the exclusion radius of a bubble is discarded.
-        bubbles = len(bubble_boxes)
-        if bubble_boxes:
-            kept = [p for p in particles
-                    if not self._near_any(p.bbox, bubble_boxes,
-                                          self._cfg.bubble_exclusion_radius)]
-            bubbles += len(particles) - len(kept)
-            particles = kept
-
-        return DetectionResult(particles, bubbles, mask)
-
-    @staticmethod
-    def _near_any(bbox: tuple[int, int, int, int],
-                  boxes: list[tuple[int, int, int, int]],
-                  radius: int) -> bool:
-        x, y, w, h = bbox
-        for bx, by, bw, bh in boxes:
-            if (x < bx + bw + radius and bx < x + w + radius
-                    and y < by + bh + radius and by < y + h + radius):
-                return True
-        return False
-
-    def _preprocess(self, frame: np.ndarray) -> np.ndarray:
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        return cv2.GaussianBlur(gray, self._cfg.blur_kernel, 0)
-
-    def _segment(self, blurred_frame: np.ndarray,
-                 stages: dict[str, np.ndarray] | None = None
-                 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-        """Returns (binary mask, darkness image, local background estimate)."""
-        if self._cfg.segmentation_mode == "local":
-            kernel_size = self._cfg.local_background_kernel
-            local_background = cv2.blur(blurred_frame, (kernel_size, kernel_size))
-            # Particle = darker than its local surroundings; cv2.subtract
-            # saturates at 0, so brighter-than-background pixels drop out.
-            difference = cv2.subtract(local_background, blurred_frame)
-            threshold = self._cfg.local_darkness_threshold
-            if stages is not None:
-                stages["03_fondo_local"] = local_background
+def filter_by_area(contours: list[np.ndarray], min_area: float,
+                   max_area: float, max_circularity: float
+                   ) -> tuple[list[np.ndarray], list[np.ndarray]]:
+    """Splits contours into (kept, discarded) by area and circularity.
+    Blobs near-perfectly circular (circularity >= max_circularity) are
+    discarded as bubbles, regardless of area."""
+    kept, discarded = [], []
+    for contour in contours:
+        area_ok = min_area <= cv2.contourArea(contour) <= max_area
+        round_ok = circularity(contour) < max_circularity
+        if area_ok and round_ok:
+            kept.append(contour)
         else:
-            local_background = self._background_blur
-            difference = cv2.absdiff(blurred_frame, self._background_blur)
-            threshold = self._cfg.subtraction_threshold
-        _, thresholded = cv2.threshold(difference, threshold, 255, cv2.THRESH_BINARY)
-        opened = cv2.morphologyEx(thresholded, cv2.MORPH_OPEN, self._kernel)
-        closed = cv2.morphologyEx(opened, cv2.MORPH_CLOSE, self._kernel)
-        if stages is not None:
-            stages["03_diferencia"] = difference
-            stages["04_umbral"] = thresholded
-            stages["05_apertura"] = opened
-            stages["06_cierre"] = closed
-        return closed, difference, local_background
-
-    def _analyze_contour(self, contour: np.ndarray, gray_frame: np.ndarray,
-                         darkness: np.ndarray,
-                         local_background: np.ndarray) -> Detection | None:
-        area = cv2.contourArea(contour)
-        # Early discard: avoids computing expensive features over noise
-        if area < self._cfg.min_area or area > self._cfg.max_area:
-            return None
-
-        perimeter = cv2.arcLength(contour, True)
-        x, y, w, h = cv2.boundingRect(contour)
-        aspect_ratio = w / h if h > 0 else 0.0
-        circularity = (4 * np.pi * area / perimeter ** 2) if perimeter > 0 else 0.0
-        mean_width = (2 * area / perimeter) if perimeter > 0 else 0.0
-        peak_darkness = float(darkness[y:y + h, x:x + w].max())
-        intensity, core, rim = self._internal_intensities(
-            contour, gray_frame, (x, y, w, h))
-        spread = self._ring_spread(contour, gray_frame, (x, y, w, h))
-
-        particle_class = self._classifier.classify(
-            area, aspect_ratio, circularity, core, rim, peak_darkness,
-            mean_width, spread)
-        if particle_class is None:
-            return None
-        return Detection(particle_class, contour, (x, y, w, h),
-                         area, aspect_ratio, circularity, intensity, core, rim,
-                         peak_darkness, mean_width, spread)
-
-    def _ring_spread(self, contour: np.ndarray, gray_frame: np.ndarray,
-                     bbox: tuple[int, int, int, int]) -> float:
-        """p95 - p50 of the gray values in a ring around the blob.
-
-        A solid particle sits on uniform background -> low spread. A bubble
-        border always touches the bubble's bright interior on one side ->
-        the ring has a bright tail -> high spread. Robust against dark
-        neighbors (they lower p50, not p95) and against the local dip the
-        box blur introduces around dark blobs."""
-        ring_width = self._cfg.bubble_halo_width
-        x, y, w, h = bbox
-        frame_h, frame_w = gray_frame.shape
-        x0, y0 = max(0, x - ring_width), max(0, y - ring_width)
-        x1, y1 = min(frame_w, x + w + ring_width), min(frame_h, y + h + ring_width)
-
-        filled = np.zeros((y1 - y0, x1 - x0), np.uint8)
-        cv2.drawContours(filled, [contour - (x0, y0)], -1, 255, -1)
-        kernel = np.ones((ring_width, ring_width), np.uint8)
-        ring = cv2.subtract(cv2.dilate(filled, kernel), filled)
-        ring_values = gray_frame[y0:y1, x0:x1][ring > 0]
-        if ring_values.size == 0:
-            return 0.0
-        p50, p95 = np.percentile(ring_values, (50, 95))
-        return float(p95 - p50)
-
-    @staticmethod
-    def _internal_intensities(contour: np.ndarray, gray_frame: np.ndarray,
-                              bbox: tuple[int, int, int, int]
-                              ) -> tuple[float, float, float]:
-        """Mean brightness of the filled blob, of its eroded core and of the
-        outer band (blob minus core). Computed only over the bounding box
-        (not the full frame) for performance on the Pi.
-
-        A bubble segments as a dark ring: filling its outer contour covers
-        the bright interior, so core >> rim exposes it."""
-        x, y, w, h = bbox
-        roi = gray_frame[y:y + h, x:x + w]
-        filled = np.zeros((h, w), np.uint8)
-        cv2.drawContours(filled, [contour - (x, y)], -1, 255, -1)
-        mean = cv2.mean(roi, mask=filled)[0]
-
-        # Erosion proportional to blob size, so the rim band scales with it
-        erosion = max(3, min(w, h) // 4)
-        kernel = np.ones((erosion, erosion), np.uint8)
-        core_mask = cv2.erode(filled, kernel)
-        if cv2.countNonZero(core_mask) == 0:
-            # Blob too thin to erode: no distinguishable core
-            return mean, mean, mean
-        rim_mask = cv2.subtract(filled, core_mask)
-        core = cv2.mean(roi, mask=core_mask)[0]
-        rim = cv2.mean(roi, mask=rim_mask)[0] if cv2.countNonZero(rim_mask) else mean
-        return mean, core, rim
+            discarded.append(contour)
+    return kept, discarded
 
 
-def show_result(frame_bgr: np.ndarray, result: DetectionResult) -> None:
-    """Two-panel figure: original | detected contours over the original."""
+def draw_classified(frame_bgr: np.ndarray, kept: list[np.ndarray],
+                    labels: list[str]) -> np.ndarray:
+    """Each contour drawn in its class color with a text label."""
+    output = frame_bgr.copy()
+    for contour, label in zip(kept, labels):
+        color = CLASS_COLORS.get(label, (200, 200, 200))
+        cv2.drawContours(output, [contour], -1, color, 2)
+        x, y, _w, _h = cv2.boundingRect(contour)
+        cv2.putText(output, CLASS_LABELS.get(label, label), (x, y - 6),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
+    return output
+
+
+def show_original(frame_bgr: np.ndarray) -> None:
+    """Standalone, larger figure with just the original image, so pixels
+    can be inspected (hover, zoom, pan) without other panels in the way."""
     import matplotlib.pyplot as plt
-
-    contoured = frame_bgr.copy()
-    cv2.drawContours(contoured, [p.contour for p in result.particles],
-                     -1, (0, 255, 0), 2)
-
     frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
-    contoured_rgb = cv2.cvtColor(contoured, cv2.COLOR_BGR2RGB)
+    fig, ax = plt.subplots(figsize=(9, 7))
+    fig.canvas.manager.set_window_title("Original - inspeccion de pixeles")
+    ax.imshow(frame_rgb)
+    ax.set_title("Original")
+    fig.tight_layout()
 
-    fig, axes = plt.subplots(1, 2, figsize=(12, 5))
-    axes[0].imshow(frame_rgb)
-    axes[0].set_title("Original")
-    axes[1].imshow(contoured_rgb)
-    axes[1].set_title("Contornos (oscuridad local)")
-    for ax in axes:
+
+def segment_against_background(frame_bgr: np.ndarray, background_bgr: np.ndarray,
+                               cfg: BackgroundSegmentationConfig = BackgroundSegmentationConfig(),
+                               background_g: np.ndarray | None = None
+                               ) -> dict[str, np.ndarray]:
+    """canal_g crudo (para features) + mascara_g (via absdiff contra el
+    fondo, blur, threshold, apertura+cierre).
+
+    frame_bgr y background_bgr deben llegar ya recortados (ver
+    crop_top_bottom_strips) por el llamador, antes de entrar al pipeline:
+    el recorte de bordes es una decision de que region analizar, no un
+    detalle interno de la segmentacion.
+
+    background_g: canal verde del fondo ya extraido, para evitar repetir
+    el split del fondo (que no cambia) en cada frame de un video. Si no
+    se pasa, se calcula aqui."""
+    g = frame_bgr[:, :, 1]
+    bg_g = background_g if background_g is not None else background_bgr[:, :, 1]
+    diff = cv2.absdiff(g, bg_g)
+    blurred = cv2.GaussianBlur(diff, (cfg.blur_ksize, cfg.blur_ksize), 0)
+    _, binary = cv2.threshold(blurred, cfg.diff_thresh, 255, cv2.THRESH_BINARY)
+    if cfg.open_ksize > 1:
+        open_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (cfg.open_ksize,) * 2)
+        opened = cv2.morphologyEx(binary, cv2.MORPH_OPEN, open_kernel)
+    else:
+        opened = binary
+    if cfg.close_ksize > 1:
+        close_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (cfg.close_ksize,) * 2)
+        closed = cv2.morphologyEx(opened, cv2.MORPH_CLOSE, close_kernel)
+    else:
+        closed = opened
+    return {
+        "canal_g": g,
+        "fondo_g": bg_g,
+        "diferencia_g": diff,
+        "diferencia_blur": blurred,
+        "umbral": binary,
+        "apertura": opened,
+        "mascara_g": closed,
+    }
+
+
+def show_morphology_stages(frame_bgr: np.ndarray, stages: dict[str, np.ndarray]) -> None:
+    """Grid with every step of the pipeline (original, canal G, fondo G,
+    diferencia, blur, umbral, apertura, cierre final), para ver en que paso
+    se pierde una fibra."""
+    import matplotlib.pyplot as plt
+    frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
+    panels = [
+        ("Original", frame_rgb),
+        ("Canal G (frame)", stages["canal_g"]),
+        ("Canal G (fondo)", stages["fondo_g"]),
+        ("Diferencia |frame-fondo|", stages["diferencia_g"]),
+        ("Diferencia + blur", stages["diferencia_blur"]),
+        ("Umbral (binaria)", stages["umbral"]),
+        ("Apertura (quita ruido)", stages["apertura"]),
+        ("Cierre (mascara final)", stages["mascara_g"]),
+    ]
+    fig, axes = plt.subplots(2, 4, figsize=(16, 8))
+    for ax, (title, img) in zip(axes.flat, panels):
+        cmap = None if img.ndim == 3 else "gray"
+        ax.imshow(img, cmap=cmap)
+        ax.set_title(title, fontsize=10)
         ax.axis("off")
     fig.tight_layout()
     plt.show()
 
 
+def draw_contours_debug(frame_bgr: np.ndarray, mask: np.ndarray,
+                        min_area: float, max_area: float,
+                        max_circularity: float) -> np.ndarray:
+    """Draws contours color-coded by whether they passed the filter, and
+    labels area/circularity on both
+    the accepted (green) and discarded (red) contours."""
+    kept, discarded = filter_by_area(
+        extract_contours(mask), min_area, max_area, max_circularity)
+    output = frame_bgr.copy()
+    for contour, color, thickness in ([(c, (0, 0, 255), 1) for c in discarded]
+                                       + [(c, (0, 255, 0), 2) for c in kept]):
+        cv2.drawContours(output, [contour], -1, color, thickness)
+        x, y, _w, _h = cv2.boundingRect(contour)
+        cv2.putText(output, f"{cv2.contourArea(contour):.0f} c={circularity(contour):.2f}",
+                    (x, y - 4), cv2.FONT_HERSHEY_SIMPLEX, 0.4, color, 1)
+    print(f"Blobs: {len(kept)} detectados, {len(discarded)} descartados "
+          f"por area/circularidad")
+    return output
+
+
+def classify_frame_v3(frame_bgr: np.ndarray, background_bgr: np.ndarray,
+                      classifier: RandomForestParticleClassifier,
+                      cfg: BackgroundSegmentationConfig = BackgroundSegmentationConfig(),
+                      background_g: np.ndarray | None = None
+                      ) -> list[ClassifiedParticle]:
+
+    stages = segment_against_background(frame_bgr, background_bgr, cfg, background_g)
+    kept, _ = filter_by_area(
+        extract_contours(stages["mascara_g"]), cfg.min_area, cfg.max_area,
+        cfg.max_circularity)
+    features_list = [extract_features(contour) for contour in kept]
+    labels = classifier.classify_batch(features_list)
+
+    return [
+        ClassifiedParticle(contour, label, cv2.boundingRect(contour))
+        for contour, label in zip(kept, labels)
+    ]
+
+
+def show_stages_v3(frame_bgr: np.ndarray, stages: dict[str, np.ndarray],
+                   min_area: float = BackgroundSegmentationConfig.min_area,
+                   max_area: float = BackgroundSegmentationConfig.max_area,
+                   classifier: RandomForestParticleClassifier | None = None,
+                   max_circularity: float = BackgroundSegmentationConfig.max_circularity
+                   ) -> None:
+    import matplotlib.pyplot as plt
+    frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
+
+    if classifier is not None:
+        kept, _ = filter_by_area(
+            extract_contours(stages["mascara_g"]), min_area, max_area,
+            max_circularity)
+        features_list = [extract_features(contour) for contour in kept]
+        labels = classifier.classify_batch(features_list)
+        result = draw_classified(frame_bgr, kept, labels)
+        n_fiber = labels.count("fiber")
+        n_amorf = labels.count("amorphous")
+        title = f"Clasificacion RF: {n_fiber} fibra, {n_amorf} amorfa"
+        print(f"Clasificados: {n_fiber} fibra, {n_amorf} amorfa")
+    else:
+        result = draw_contours_debug(frame_bgr, stages["mascara_g"], min_area, max_area,
+                                     max_circularity)
+        title = "Contornos (diff vs fondo)"
+    result_rgb = cv2.cvtColor(result, cv2.COLOR_BGR2RGB)
+
+    fig, axes = plt.subplots(1, 2, figsize=(12, 5))
+    axes[0].imshow(frame_rgb)
+    axes[0].set_title("Original")
+    axes[1].imshow(result_rgb)
+    axes[1].set_title(title)
+    for ax in axes:
+        ax.axis("off")
+    fig.tight_layout()
+
+    plt.show()
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Local-darkness detection over a single frame, "
-                     "showing the original next to the detected contours.")
-    parser.add_argument("frame", help="Path to the test frame (image file)")
+        description="Segmentacion por resta contra una imagen de fondo "
+                     "(canal verde), con visualizacion. Los parametros del "
+                     "pipeline (umbrales, kernels, area, circularidad) se "
+                     "ajustan editando BackgroundSegmentationConfig, no por args.")
+    parser.add_argument("frame", help="Path al frame de prueba (imagen)")
+    parser.add_argument("--background", required=True,
+                        help="Path a la imagen de fondo (agua limpia, sin particulas)")
+    parser.add_argument("--no-classify", action="store_true",
+                        help="No usar el modelo RF aunque exista; solo contornos")
+    parser.add_argument("--debug-stages", action="store_true",
+                        help="Muestra cada paso del pipeline (diff, blur, "
+                             "umbral, apertura, cierre) en una grilla, para "
+                             "ver en que paso se pierde una fibra")
     return parser.parse_args()
 
 
@@ -322,12 +266,30 @@ def main() -> None:
     frame = cv2.imread(args.frame)
     if frame is None:
         raise IOError(f"Could not load frame: {args.frame}")
+    background = cv2.imread(args.background)
+    if background is None:
+        raise IOError(f"Could not load background: {args.background}")
+    if frame.shape != background.shape:
+        raise IOError(
+            f"Frame y background tienen tamano distinto: "
+            f"{frame.shape} vs {background.shape}. Deben venir de la misma "
+            f"camara/resolucion/crop.")
 
-    detector = MicroplasticDetector(DetectionConfig())
-    result = detector.detect(frame)
-    print(f"Particulas detectadas: {len(result.particles)} | "
-          f"burbujas descartadas: {result.discarded_bubbles}")
-    show_result(frame, result)
+    frame = crop_top_bottom_strips(frame)
+    background = crop_top_bottom_strips(background)
+
+    show_original(frame)
+
+    classifier = None if args.no_classify else load_if_available()
+    if classifier is not None:
+        print("Modelo RF cargado: mostrando clasificacion fibra/amorfa")
+
+    cfg = BackgroundSegmentationConfig()
+    stages = segment_against_background(frame, background, cfg)
+    if args.debug_stages:
+        show_morphology_stages(frame, stages)
+    show_stages_v3(frame, stages, cfg.min_area, cfg.max_area, classifier,
+                   cfg.max_circularity)
 
 
 if __name__ == "__main__":

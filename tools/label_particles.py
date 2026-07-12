@@ -1,6 +1,6 @@
 """Interactive per-particle labeling tool to build the training dataset.
 
-Runs detector_v3's segmentation (resta contra una imagen de fondo) over
+Runs detector's segmentation (resta contra una imagen de fondo) over
 every frame under a folder, then for each detected particle shows it
 highlighted and waits for a keypress to label it. Each labeled particle
 becomes one row (its feature vector + label) in dataset.csv.
@@ -14,19 +14,22 @@ Keys:
     q   quit and save
 
 Usage:
-    uv run label_particles.py --background frames/fondo.jpg
-    uv run label_particles.py --background frames/fondo.jpg --frames otra/ --out mi_dataset.csv
+    uv run tools/label_particles.py --background frames/fondo.jpg
+    uv run tools/label_particles.py --background frames/fondo.jpg --frames otra/ --out mi_dataset.csv
 """
 
 import argparse
 import csv
+import sys
 from pathlib import Path
 
 import cv2
 import numpy as np
 
-from detector_v3 import (BackgroundSegmentationConfig, extract_contours,
-                         filter_by_area, segment_against_background)
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from detector import (BackgroundSegmentationConfig, extract_contours,
+                      filter_by_area, segment_against_background)
 from features import FEATURE_NAMES, extract_features, feature_vector
 from utils import crop_top_bottom_strips
 
@@ -46,14 +49,13 @@ def find_frames(frames_dir: Path) -> list[Path]:
 
 
 def detect_particles(frame_bgr: np.ndarray, background_bgr: np.ndarray,
-                     cfg: BackgroundSegmentationConfig
-                     ) -> tuple[list[np.ndarray], np.ndarray]:
-    """(kept contours, green channel) for one frame, via detector_v3."""
+                     cfg: BackgroundSegmentationConfig) -> list[np.ndarray]:
+    """Kept contours for one frame, via detector."""
     stages = segment_against_background(frame_bgr, background_bgr, cfg)
     kept, _discarded = filter_by_area(
         extract_contours(stages["mascara_g"]), cfg.min_area, cfg.max_area,
         cfg.max_circularity)
-    return kept, stages["canal_g"]
+    return kept
 
 
 def already_labeled(csv_path: Path) -> set[tuple[str, int]]:
@@ -130,7 +132,7 @@ def run(frames_dir: Path, csv_path: Path, merged_dir: Path,
             # que descarta el pipeline de deteccion en produccion.
             frame = crop_top_bottom_strips(frame)
 
-            contours, gray = detect_particles(frame, background_bgr, cfg)
+            contours = detect_particles(frame, background_bgr, cfg)
             for blob_id, contour in enumerate(contours):
                 if (source, blob_id) in done:
                     continue
@@ -142,7 +144,7 @@ def run(frames_dir: Path, csv_path: Path, merged_dir: Path,
                     return
                 if key in LABEL_KEYS:
                     label = LABEL_KEYS[key]
-                    feats = extract_features(contour, gray)
+                    feats = extract_features(contour)
                     writer.writerow(
                         feature_vector(feats) + [label, source, blob_id])
                     handle.flush()
@@ -180,8 +182,9 @@ def parse_args() -> argparse.Namespace:
                         help="Imagen de fondo (agua limpia, sin particulas)")
     parser.add_argument("--frames", type=Path, default=Path("frames"),
                         help="Carpeta con los frames (default: frames/)")
-    parser.add_argument("--out", type=Path, default=Path("dataset.csv"),
-                        help="CSV de salida (default: dataset.csv)")
+    parser.add_argument("--out", type=Path,
+                        default=Path("random_forest/dataset.csv"),
+                        help="CSV de salida (default: random_forest/dataset.csv)")
     parser.add_argument("--merged", type=Path, default=Path("merged"),
                         help="Carpeta para recortes cruzados/fusionados")
     return parser.parse_args()

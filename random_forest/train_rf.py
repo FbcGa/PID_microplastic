@@ -8,33 +8,42 @@ Random Forest splits on thresholds, so features are used as-is (no scaling).
 class_weight="balanced" compensates the likely fiber/amorphous imbalance.
 
 Usage:
-    uv run train_rf.py                       (dataset.csv -> rf_model.joblib)
-    uv run train_rf.py --dataset otro.csv --out modelo.joblib --test-size 0.25
+    uv run random_forest/train_rf.py                       (dataset.csv -> rf_model.joblib)
+    uv run random_forest/train_rf.py --dataset otro.csv --out modelo.joblib --test-size 0.25
 """
 
 import argparse
 import csv
+import sys
 from pathlib import Path
 
 import joblib
 import numpy as np
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import classification_report, confusion_matrix
-from sklearn.model_selection import StratifiedKFold, cross_val_score, train_test_split
+from sklearn.model_selection import GroupKFold, cross_val_score, train_test_split
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from features import FEATURE_NAMES
 
+THIS_DIR = Path(__file__).resolve().parent
 
-def load_dataset(csv_path: Path) -> tuple[np.ndarray, np.ndarray]:
-    """Loads (X, y) from dataset.csv, X columns in FEATURE_NAMES order."""
-    features, labels = [], []
+
+def load_dataset(csv_path: Path) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Loads (X, y, groups) from dataset.csv, X columns in FEATURE_NAMES
+    order. groups = source_frame, so CV can split by frame instead of by
+    particle (particles from the same frame are correlated, not independent
+    samples)."""
+    features, labels, groups = [], [], []
     with csv_path.open(newline="") as f:
         for row in csv.DictReader(f):
             features.append([float(row[name]) for name in FEATURE_NAMES])
             labels.append(row["label"])
+            groups.append(row["source_frame"])
     if not features:
         raise ValueError(f"Dataset vacio: {csv_path}")
-    return np.asarray(features, dtype=float), np.asarray(labels)
+    return np.asarray(features, dtype=float), np.asarray(labels), np.asarray(groups)
 
 
 def build_model(random_state: int = 0) -> RandomForestClassifier:
@@ -55,17 +64,20 @@ def report_class_balance(y: np.ndarray) -> None:
         print(f"  {cls:<12} {n}")
 
 
-def cross_validate(model: RandomForestClassifier, X: np.ndarray,
-                   y: np.ndarray) -> None:
-    """Stratified k-fold CV, folds capped by the smallest class."""
-    min_class = int(np.unique(y, return_counts=True)[1].min())
-    n_splits = max(2, min(5, min_class))
-    if min_class < 2:
-        print("CV omitida: alguna clase tiene < 2 ejemplos.")
+def cross_validate(model: RandomForestClassifier, X: np.ndarray, y: np.ndarray,
+                   groups: np.ndarray) -> None:
+    """Grouped k-fold CV: folds split by source_frame, so no particle from a
+    frame in the training fold also appears in the validation fold. Without
+    this, a fold can score high just by memorizing a specific frame's
+    background/lighting quirks rather than generalizing to new frames."""
+    n_groups = len(np.unique(groups))
+    n_splits = max(2, min(5, n_groups))
+    if n_groups < 2:
+        print("CV omitida: el dataset tiene un solo frame de origen.")
         return
-    cv = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=0)
-    scores = cross_val_score(model, X, y, cv=cv, scoring="f1_macro")
-    print(f"F1-macro CV ({n_splits}-fold): "
+    cv = GroupKFold(n_splits=n_splits)
+    scores = cross_val_score(model, X, y, groups=groups, cv=cv, scoring="f1_macro")
+    print(f"F1-macro CV agrupada por frame ({n_splits}-fold): "
           f"{scores.mean():.3f} +/- {scores.std():.3f}")
 
 
@@ -77,7 +89,7 @@ def show_importances(model: RandomForestClassifier) -> None:
 
 
 def train(csv_path: Path, model_path: Path, test_size: float) -> None:
-    X, y = load_dataset(csv_path)
+    X, y, groups = load_dataset(csv_path)
     print(f"Dataset: {len(y)} muestras, {X.shape[1]} features")
     report_class_balance(y)
 
@@ -94,7 +106,7 @@ def train(csv_path: Path, model_path: Path, test_size: float) -> None:
         return
 
     model = build_model()
-    cross_validate(model, X, y)
+    cross_validate(model, X, y, groups)
 
     # Held-out split for a confusion matrix (stratified when possible).
     min_class = int(np.unique(y, return_counts=True)[1].min())
@@ -122,8 +134,8 @@ def train(csv_path: Path, model_path: Path, test_size: float) -> None:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Entrena el Random Forest fibra vs amorfa.")
-    parser.add_argument("--dataset", type=Path, default=Path("dataset.csv"))
-    parser.add_argument("--out", type=Path, default=Path("rf_model.joblib"))
+    parser.add_argument("--dataset", type=Path, default=THIS_DIR / "dataset.csv")
+    parser.add_argument("--out", type=Path, default=THIS_DIR / "rf_model.joblib")
     parser.add_argument("--test-size", type=float, default=0.25)
     return parser.parse_args()
 

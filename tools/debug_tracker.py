@@ -1,6 +1,6 @@
 """Frame-by-frame tracker debug log for a whole video.
 
-Runs the same pipeline as main.py (detector_v3 segmentation -> RF
+Runs the same pipeline as main.py (detector segmentation -> RF
 classification -> tracker) over every frame, and writes:
   - one CSV row per (frame, live track): positions, velocity, class votes,
     hits, coasting, confirmation, and the running unique-particle counts.
@@ -9,21 +9,24 @@ classification -> tracker) over every frame, and writes:
     frames_missing, plus the frame number and running counts.
 
 Usage:
-    uv run debug_tracker.py amorfas.mp4 --background fondo.jpg
-    uv run debug_tracker.py amorfas.mp4 --background fondo.jpg --out debug_amorfas.csv --video-out debug_amorfas.mp4
-    uv run debug_tracker.py amorfas.mp4 --background fondo.jpg --no-video   (CSV only, faster)
+    uv run tools/debug_tracker.py amorfas.mp4 --background fondo.jpg
+    uv run tools/debug_tracker.py amorfas.mp4 --background fondo.jpg --out debug_amorfas.csv --video-out debug_amorfas.mp4
+    uv run tools/debug_tracker.py amorfas.mp4 --background fondo.jpg --no-video   (CSV only, faster)
 """
 
 import argparse
 import csv
+import sys
 from pathlib import Path
 
 import cv2
 
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
 from config import TrackerConfig
-from detector_v3 import (CLASS_COLORS, CLASS_LABELS,
-                         BackgroundSegmentationConfig, classify_frame_v3)
-from rf_classifier import load_if_available
+from detector import (CLASS_COLORS, CLASS_LABELS,
+                      BackgroundSegmentationConfig, classify_frame_v3)
+from random_forest.rf_classifier import load_if_available
 from tracker import Tracker
 from utils import EdgeCropPx, crop_top_bottom_strips
 
@@ -145,7 +148,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("video", type=Path, help="Ruta del video a procesar")
     parser.add_argument("--background", type=Path, required=True,
                         help="Imagen de fondo (agua limpia, sin particulas)")
-    parser.add_argument("--model", type=Path, default=Path("rf_model.joblib"))
+    parser.add_argument("--model", type=Path,
+                        default=Path("random_forest/rf_model.joblib"))
     parser.add_argument("--out", type=Path, default=None,
                         help="CSV de salida (default: debug_<video>.csv)")
     parser.add_argument("--video-out", type=Path, default=None,
