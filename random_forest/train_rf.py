@@ -47,9 +47,12 @@ def load_dataset(csv_path: Path) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
 
 
 def build_model(random_state: int = 0) -> RandomForestClassifier:
+    # n_estimators=300/max_depth=None no mejoran el F1 sobre este dataset
+    # (mismo 0.997 en CV agrupada por frame) y triplican el costo de
+    # inferencia en la Pi; podado a 100/16 sin perder score.
     return RandomForestClassifier(
-        n_estimators=300,
-        max_depth=None,
+        n_estimators=100,
+        max_depth=16,
         min_samples_leaf=1,
         class_weight="balanced",
         random_state=random_state,

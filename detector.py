@@ -16,7 +16,7 @@ import numpy as np
 from config import BackgroundSegmentationConfig
 from features import extract_features
 from random_forest.rf_classifier import RandomForestParticleClassifier, load_if_available
-from utils import crop_top_bottom_strips
+from cropping import crop_top_bottom_strips
 
 # Colores por clase (BGR): fibra naranja, amorfa verde
 CLASS_COLORS: dict[str, tuple[int, int, int]] = {
@@ -101,7 +101,8 @@ def show_original(frame_bgr: np.ndarray) -> None:
 
 def segment_against_background(frame_bgr: np.ndarray, background_bgr: np.ndarray,
                                cfg: BackgroundSegmentationConfig = BackgroundSegmentationConfig(),
-                               background_g: np.ndarray | None = None
+                               background_g: np.ndarray | None = None,
+                               full_stages: bool = True
                                ) -> dict[str, np.ndarray]:
     """canal_g crudo (para features) + mascara_g (via absdiff contra el
     fondo, blur, threshold, apertura+cierre).
@@ -113,7 +114,11 @@ def segment_against_background(frame_bgr: np.ndarray, background_bgr: np.ndarray
 
     background_g: canal verde del fondo ya extraido, para evitar repetir
     el split del fondo (que no cambia) en cada frame de un video. Si no
-    se pasa, se calcula aqui."""
+    se pasa, se calcula aqui.
+
+    full_stages: si es False, solo se devuelve "mascara_g" (el camino en
+    vivo solo necesita la mascara para contornos; el resto de las etapas
+    son para depuracion visual, uv run detector.py --debug-stages)."""
     g = frame_bgr[:, :, 1]
     bg_g = background_g if background_g is not None else background_bgr[:, :, 1]
     diff = cv2.absdiff(g, bg_g)
@@ -129,6 +134,8 @@ def segment_against_background(frame_bgr: np.ndarray, background_bgr: np.ndarray
         closed = cv2.morphologyEx(opened, cv2.MORPH_CLOSE, close_kernel)
     else:
         closed = opened
+    if not full_stages:
+        return {"mascara_g": closed}
     return {
         "canal_g": g,
         "fondo_g": bg_g,
@@ -156,13 +163,14 @@ def show_morphology_stages(frame_bgr: np.ndarray, stages: dict[str, np.ndarray])
         ("Apertura (quita ruido)", stages["apertura"]),
         ("Cierre (mascara final)", stages["mascara_g"]),
     ]
-    fig, axes = plt.subplots(2, 4, figsize=(16, 8))
+    fig, axes = plt.subplots(2, 4, figsize=(18, 9))
+    for ax in axes.flat:
+        ax.axis("off")
     for ax, (title, img) in zip(axes.flat, panels):
         cmap = None if img.ndim == 3 else "gray"
         ax.imshow(img, cmap=cmap)
-        ax.set_title(title, fontsize=10)
-        ax.axis("off")
-    fig.tight_layout()
+        ax.set_title(title, fontsize=13, fontweight="bold", pad=8)
+    fig.tight_layout(pad=1.5, h_pad=3.0, w_pad=1.5)
     plt.show()
 
 
@@ -186,13 +194,14 @@ def draw_contours_debug(frame_bgr: np.ndarray, mask: np.ndarray,
     return output
 
 
-def classify_frame_v3(frame_bgr: np.ndarray, background_bgr: np.ndarray,
+def classify_frame(frame_bgr: np.ndarray, background_bgr: np.ndarray,
                       classifier: RandomForestParticleClassifier,
                       cfg: BackgroundSegmentationConfig = BackgroundSegmentationConfig(),
                       background_g: np.ndarray | None = None
                       ) -> list[ClassifiedParticle]:
 
-    stages = segment_against_background(frame_bgr, background_bgr, cfg, background_g)
+    stages = segment_against_background(frame_bgr, background_bgr, cfg, background_g,
+                                        full_stages=False)
     kept, _ = filter_by_area(
         extract_contours(stages["mascara_g"]), cfg.min_area, cfg.max_area,
         cfg.max_circularity)
@@ -205,7 +214,7 @@ def classify_frame_v3(frame_bgr: np.ndarray, background_bgr: np.ndarray,
     ]
 
 
-def show_stages_v3(frame_bgr: np.ndarray, stages: dict[str, np.ndarray],
+def show_stages(frame_bgr: np.ndarray, stages: dict[str, np.ndarray],
                    min_area: float = BackgroundSegmentationConfig.min_area,
                    max_area: float = BackgroundSegmentationConfig.max_area,
                    classifier: RandomForestParticleClassifier | None = None,
@@ -288,7 +297,7 @@ def main() -> None:
     stages = segment_against_background(frame, background, cfg)
     if args.debug_stages:
         show_morphology_stages(frame, stages)
-    show_stages_v3(frame, stages, cfg.min_area, cfg.max_area, classifier,
+    show_stages(frame, stages, cfg.min_area, cfg.max_area, classifier,
                    cfg.max_circularity)
 
 

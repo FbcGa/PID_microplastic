@@ -31,7 +31,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from detector import (BackgroundSegmentationConfig, extract_contours,
                       filter_by_area, segment_against_background)
 from features import FEATURE_NAMES, extract_features, feature_vector
-from utils import crop_top_bottom_strips
+from cropping import crop_top_bottom_strips
 
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp"}
 LABEL_KEYS = {ord("f"): "fiber", ord("a"): "amorphous"}
