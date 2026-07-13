@@ -9,16 +9,23 @@ Usage:
 
 import argparse
 import tkinter as tk
+from enum import Enum, auto
 from pathlib import Path
 
 from app_ui import App, Callbacks
 from calibration import BACKGROUND_PATH, load_calibration, save_calibration
 from camera import RESOLUTION, open_camera
 from processing import Mode, PipelineWorker
-from arduino.arduino import open_arduino
+from arduino.arduino import PumpState, open_arduino
 from random_forest.rf_classifier import load_if_available
 
 MIN_VISIBLE_HEIGHT = 20  # margen minimo entre las lineas de crop sup/inf
+PENDING_POLL_MS = 250  # frecuencia de chequeo del estado de la bomba (START/STOP)
+
+
+class PendingAction(Enum):
+    START_WHEN_FUZZY = auto()
+    STOP_WHEN_OFF = auto()
 
 
 def parse_args() -> argparse.Namespace:
@@ -72,13 +79,29 @@ def main() -> None:
         worker.set_mode(Mode.IDLE)
         pump.stop()
 
+    # La bomba rampea al arrancar (~8 s a caudal alto) y al parar (purga en
+    # escalones antes de apagarse); la deteccion debe seguir esas rampas en
+    # vez de arrancar/parar al toque del boton, asi que START/STOP solo
+    # arman una accion pendiente que el poller resuelve mirando pump.status().
+    pending: dict[str, PendingAction | None] = {"action": None}
+
     def on_start() -> None:
-        worker.start_counting(calibration)
         pump.start()
+        pending["action"] = PendingAction.START_WHEN_FUZZY
 
     def on_stop() -> None:
-        worker.set_mode(Mode.IDLE)
         pump.stop()
+        pending["action"] = PendingAction.STOP_WHEN_OFF
+
+    def poll_pending() -> None:
+        state = pump.status().state
+        if pending["action"] == PendingAction.START_WHEN_FUZZY and state == PumpState.FUZZY_ACTIVO:
+            worker.start_counting(calibration)
+            pending["action"] = None
+        elif pending["action"] == PendingAction.STOP_WHEN_OFF and state == PumpState.OFF:
+            worker.set_mode(Mode.IDLE)
+            pending["action"] = None
+        root.after(PENDING_POLL_MS, poll_pending)
 
     def on_reset() -> None:
         worker.reset_counts()
@@ -105,6 +128,7 @@ def main() -> None:
               calibration.crop_bottom, background_exists=BACKGROUND_PATH.exists(),
               get_pump_status=pump.status)
 
+    root.after(PENDING_POLL_MS, poll_pending)
     root.protocol("WM_DELETE_WINDOW", on_close)
     root.mainloop()
 

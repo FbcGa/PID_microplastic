@@ -15,6 +15,7 @@ import logging
 import threading
 import time
 from dataclasses import dataclass
+from enum import StrEnum
 
 import serial
 
@@ -26,16 +27,25 @@ BAUDRATE = 9600
 ARDUINO_RESET_S = 2.0
 
 
+class PumpState(StrEnum):
+    """Espeja el enum Estado del sketch (bomba_fuzzy.ino) via estado_str()."""
+    OFF = "OFF"
+    LIMPIEZA = "LIMPIEZA"
+    RAMPA_SUBIDA = "RAMPA_SUBIDA"
+    FUZZY_ACTIVO = "FUZZY_ACTIVO"
+    RAMPA_STOP = "RAMPA_STOP"
+
+
 @dataclass(frozen=True)
 class PumpStatus:
-    state: str
+    state: PumpState
     pwm: int
     caudal: float
     membership: str
     volume_ml: float
 
 
-IDLE_STATUS = PumpStatus(state="OFF", pwm=0, caudal=0.0, membership="-", volume_ml=0.0)
+IDLE_STATUS = PumpStatus(state=PumpState.OFF, pwm=0, caudal=0.0, membership="-", volume_ml=0.0)
 
 
 class Arduino:
@@ -83,7 +93,7 @@ class Arduino:
             fields[key] = value
         try:
             return PumpStatus(
-                state=fields["ST"],
+                state=PumpState(fields["ST"]),
                 pwm=int(fields["PWM"]),
                 caudal=float(fields["CS"]),
                 membership=fields["MEM"],

@@ -19,7 +19,7 @@ import cv2
 from PIL import Image, ImageTk
 
 from processing import FrameResult, Mode
-from arduino.arduino import PumpStatus
+from arduino.arduino import PumpState, PumpStatus
 
 POLL_MS = 33
 CROP_STEP = 5
@@ -280,7 +280,7 @@ class App:
         caudal_text = f"Caudal: {status.caudal:.0f} ml/min"
         self._caudal_label.config(text=caudal_text)
         self._calib_caudal_label.config(text=caudal_text)
-        label = status.membership if status.state == "FUZZY_ACTIVO" else status.state
+        label = status.membership if status.state == PumpState.FUZZY_ACTIVO else status.state
         self._pump_label.config(text=f"Bomba: {label}")
 
     def _render(self, result: FrameResult) -> None:
