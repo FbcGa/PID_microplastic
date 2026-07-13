@@ -54,6 +54,22 @@ STATE_LABELS = {
     PumpState.FUZZY_ACTIVO: "Fuzzy",
     PumpState.RAMPA_STOP: "Deteniendo",
 }
+# Mismo criterio que STATE_LABELS/MEMBERSHIP_LABELS: unica fuente de verdad
+# para el color, asi Bomba/Membresia se leen de un vistazo en el panel.
+STATE_COLORS = {
+    PumpState.OFF: FG_DIM,
+    PumpState.LIMPIEZA: FG_DIM,
+    PumpState.RAMPA_SUBIDA: "#ffb74d",
+    PumpState.FUZZY_ACTIVO: ACCENT_START,
+    PumpState.RAMPA_STOP: "#ffb74d",
+}
+MEMBERSHIP_COLORS = {
+    Membership.MUY_POCAS: FG_DIM,
+    Membership.POCAS: "#9ccc65",
+    Membership.MEDIA: "#ffca28",
+    Membership.MUCHAS: "#ef5350",
+    Membership.NONE: FG_DIM,
+}
 
 
 @dataclass
@@ -182,13 +198,20 @@ class App:
                                      font=("Arial", 26, "bold"), fg=FG)
         self._total_label.pack(anchor="w", pady=6)
 
+        # Segundo divisor: separa los contadores (lo que importa de un
+        # vistazo) de la telemetria de la bomba (contexto secundario).
+        tk.Frame(counts_frame, bg="#333333", height=2).pack(fill="x", pady=(16, 8))
+
         pump_font = ("Arial", 14)
         self._caudal_label = tk.Label(counts_frame, text="Caudal: -", bg=BG,
                                       font=pump_font, fg=FG_DIM)
-        self._caudal_label.pack(anchor="w", pady=(16, 2))
+        self._caudal_label.pack(anchor="w", pady=3)
         self._pump_label = tk.Label(counts_frame, text="Bomba: -", bg=BG,
                                     font=pump_font, fg=FG_DIM)
-        self._pump_label.pack(anchor="w")
+        self._pump_label.pack(anchor="w", pady=3)
+        self._membership_label = tk.Label(counts_frame, text="Membresía: -",
+                                          bg=BG, font=pump_font, fg=FG_DIM)
+        self._membership_label.pack(anchor="w", pady=3)
 
         # --- vista de calibracion ---
         self._calib_view = tk.Frame(panel, bg=BG)
@@ -297,11 +320,18 @@ class App:
         caudal_text = f"Caudal: {status.caudal:.0f} ml/min"
         self._caudal_label.config(text=caudal_text)
         self._calib_caudal_label.config(text=caudal_text)
+        self._pump_label.config(text=f"Bomba: {STATE_LABELS[status.state]}",
+                                fg=STATE_COLORS[status.state])
+        # La telemetria conserva la ultima membresia aunque el fuzzy ya no
+        # este activo; fuera de FUZZY_ACTIVO no representa nada actual.
         if status.state == PumpState.FUZZY_ACTIVO:
-            label = MEMBERSHIP_LABELS[status.membership]
+            membership = MEMBERSHIP_LABELS[status.membership]
+            membership_color = MEMBERSHIP_COLORS[status.membership]
         else:
-            label = STATE_LABELS[status.state]
-        self._pump_label.config(text=f"Bomba: {label}")
+            membership = "-"
+            membership_color = FG_DIM
+        self._membership_label.config(text=f"Membresía: {membership}",
+                                      fg=membership_color)
 
     def _render(self, result: FrameResult) -> None:
         frame_rgb = cv2.cvtColor(result.frame_bgr, cv2.COLOR_BGR2RGB)

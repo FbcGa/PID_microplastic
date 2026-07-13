@@ -1,6 +1,6 @@
 const int PIN_STBY = 6;
-const int PIN_AIN1 = 7;
-const int PIN_AIN2 = 8;
+const int PIN_AIN1 = 8;
+const int PIN_AIN2 = 7;
 const int PIN_PWM  = 9;
 
 volatile long pulsos_total = 0;
