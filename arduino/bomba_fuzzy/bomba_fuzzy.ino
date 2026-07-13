@@ -27,12 +27,13 @@ const float CAUDAL_MAX = 150.0;
 // luego entra el fuzzy.
 const unsigned long RAMPA_MS = 8000;
 // STOP: desde el PWM actual del fuzzy sube PASO_PWM_STOP cada
-// PASO_MS_STOP hasta PWM_LIMPIEZA (purga), y ahi se apaga. Con el rango
-// fuzzy (~130) son ~4 escalones de 3 s hasta 255, es decir ~12 s antes
-// de apagar del todo.
+// PASO_MS_STOP hasta PWM_STOP_TARGET (purga), y ahi se apaga. Con el
+// rango fuzzy (~130) son ~2 escalones de 3 s hasta 190, es decir ~6 s
+// antes de apagar del todo.
 const int PASO_PWM_STOP = 40;
 const unsigned long PASO_MS_STOP = 3000UL;
 const int PWM_LIMPIEZA = 255;
+const int PWM_STOP_TARGET = 190;
 
 const int VENTANA = 10;
 float historial[VENTANA];
@@ -203,17 +204,17 @@ void actualizar_rampa() {
 
   else if (estado == RAMPA_STOP) {
     // Parada con purga: desde el PWM donde quedo el fuzzy sube
-    // PASO_PWM_STOP cada PASO_MS_STOP hasta PWM_LIMPIEZA; el escalon
+    // PASO_PWM_STOP cada PASO_MS_STOP hasta ramp_pwm_hasta; el escalon
     // final tambien se mantiene su intervalo antes de apagar del todo.
     if (transcurrido < PASO_MS_STOP) return;
-    if (pwm_actual >= PWM_LIMPIEZA) {
+    if (pwm_actual >= ramp_pwm_hasta) {
       analogWrite(PIN_PWM, 0);
       pwm_actual = 0;
       estado = OFF;
       imprimir_detenido();
       return;
     }
-    set_pwm(min(pwm_actual + PASO_PWM_STOP, PWM_LIMPIEZA));
+    set_pwm(min(pwm_actual + PASO_PWM_STOP, ramp_pwm_hasta));
     ramp_start_ms = millis();
   }
 }
@@ -286,8 +287,8 @@ void loop() {
     else if (comando == "STOP") {
       if (estado != OFF) {
         // Purga de parada: desde el PWM actual sube en escalones hasta
-        // PWM_LIMPIEZA y recien ahi se apaga (ver actualizar_rampa).
-        iniciar_rampa(pwm_actual, PWM_LIMPIEZA, RAMPA_STOP);
+        // PWM_STOP_TARGET y recien ahi se apaga (ver actualizar_rampa).
+        iniciar_rampa(pwm_actual, PWM_STOP_TARGET, RAMPA_STOP);
       }
     }
 
