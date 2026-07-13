@@ -1,17 +1,3 @@
-// ============================================
-// ARDUINO ESCLAVO — Control fuzzy de la bomba peristaltica
-// Recibe el conteo de microplasticos por frame (Raspberry Pi = maestro)
-// y ajusta el caudal mediante logica difusa. Permite ademas un override
-// manual de caudal (botones +/- del dashboard) solo para pruebas.
-//
-// Maquina de estados (comandada por la Pi, la rampa corre aqui):
-//   OFF -> CALIBRATE -> LIMPIEZA (caudal maximo, purga la imagen)
-//   OFF/LIMPIEZA -> START -> RAMPA_SUBIDA (PWM 200->115 en 8s) -> FUZZY_ACTIVO
-//   cualquier estado != OFF -> STOP -> RAMPA_BAJADA (escalones de 5 PWM
-//     cada 5s desde el PWM actual hasta 115, luego apaga) -> OFF
-// Alipazaga & Loyola — UPC Lima 2025
-// ============================================
-
 const int PIN_STBY = 6;
 const int PIN_AIN1 = 7;
 const int PIN_AIN2 = 8;
@@ -208,18 +194,18 @@ void actualizar_rampa() {
   }
 
   else if (estado == RAMPA_BAJADA) {
-    // Parada escalonada: cada PASO_MS_BAJADA baja PASO_PWM_BAJADA hasta
-    // llegar a PWM_RAMPA_INICIO; el escalon final tambien dura 5s antes
-    // de apagar del todo.
+    // Parada escalonada: del caudal maximo (PWM_MAX) al minimo (PWM_MIN),
+    // bajando PASO_PWM_BAJADA cada PASO_MS_BAJADA; el escalon final
+    // tambien dura 5s antes de apagar del todo.
     if (transcurrido < PASO_MS_BAJADA) return;
-    if (pwm_actual <= PWM_RAMPA_INICIO) {
+    if (pwm_actual <= PWM_MIN) {
       analogWrite(PIN_PWM, 0);
       pwm_actual = 0;
       estado = OFF;
       imprimir_detenido();
       return;
     }
-    set_pwm(max(pwm_actual - PASO_PWM_BAJADA, PWM_RAMPA_INICIO));
+    set_pwm(max(pwm_actual - PASO_PWM_BAJADA, PWM_MIN));
     ramp_start_ms = millis();
   }
 }
@@ -291,7 +277,10 @@ void loop() {
 
     else if (comando == "STOP") {
       if (estado != OFF) {
-        iniciar_rampa(pwm_actual, PWM_RAMPA_INICIO, RAMPA_BAJADA);
+        // La bajada arranca a caudal maximo absoluto (PWM 255, igual que
+        // limpieza) y escalona hasta el minimo (PWM_MIN) antes de apagar.
+        set_pwm(PWM_LIMPIEZA);
+        iniciar_rampa(PWM_LIMPIEZA, PWM_MIN, RAMPA_BAJADA);
       }
     }
 
