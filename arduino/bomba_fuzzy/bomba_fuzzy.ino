@@ -27,9 +27,11 @@ const float CAUDAL_MAX = 150.0;
 // luego entra el fuzzy.
 const unsigned long RAMPA_MS = 8000;
 // STOP: desde el PWM actual del fuzzy sube PASO_PWM_STOP cada
-// PASO_MS_STOP hasta PWM_LIMPIEZA (purga), y ahi se apaga.
-const int PASO_PWM_STOP = 50;
-const unsigned long PASO_MS_STOP = 2000UL;
+// PASO_MS_STOP hasta PWM_LIMPIEZA (purga), y ahi se apaga. Con el rango
+// fuzzy (~130) son ~4 escalones de 3 s hasta 255, es decir ~12 s antes
+// de apagar del todo.
+const int PASO_PWM_STOP = 40;
+const unsigned long PASO_MS_STOP = 3000UL;
 const int PWM_LIMPIEZA = 255;
 
 const int VENTANA = 10;
@@ -40,14 +42,22 @@ bool ventana_llena = false;
 enum Estado { OFF, LIMPIEZA, RAMPA_SUBIDA, FUZZY_ACTIVO, RAMPA_STOP };
 Estado estado = OFF;
 
-// Prototipo manual: el IDE de Arduino genera los prototipos automaticos
-// antes de la definicion del enum, lo que rompe la compilacion.
+// Nombres de membresia en una sola fuente de verdad (evita literales
+// sueltos repetidos) y sin String, que fragmenta el heap del AVR en
+// corridas largas.
+enum Membresia { MEM_MUY_POCAS, MEM_POCAS, MEM_MEDIA, MEM_MUCHAS, MEM_NINGUNA };
+const char* const NOMBRES_MEMBRESIA[] = {"MUY_POCAS", "POCAS", "MEDIA", "MUCHAS", "-"};
+
+// Prototipos manuales: el IDE de Arduino genera los prototipos automaticos
+// antes de la definicion de estos enums, lo que rompe la compilacion.
 void iniciar_rampa(int desde, int hasta, Estado siguiente);
+Membresia membresia_dominante(float x);
+
 int pwm_actual = 0;
 unsigned long ramp_start_ms = 0;
 int ramp_pwm_desde = 0;
 int ramp_pwm_hasta = 0;
-String membresia_actual = "-";
+Membresia membresia_actual = MEM_NINGUNA;
 
 // ---- Funciones de membresia (variable de entrada: conteo de particulas) ----
 
@@ -75,16 +85,16 @@ float muchas(float x) {
   return (x - 15.0) / 10.0;
 }
 
-String membresia_dominante(float x) {
+Membresia membresia_dominante(float x) {
   float u1 = muy_pocas(x);
   float u2 = pocas(x);
   float u3 = media(x);
   float u4 = muchas(x);
   float max_u = max(max(u1, u2), max(u3, u4));
-  if (max_u == u1) return "MUY_POCAS";
-  if (max_u == u2) return "POCAS";
-  if (max_u == u3) return "MEDIA";
-  return "MUCHAS";
+  if (max_u == u1) return MEM_MUY_POCAS;
+  if (max_u == u2) return MEM_POCAS;
+  if (max_u == u3) return MEM_MEDIA;
+  return MEM_MUCHAS;
 }
 
 int fuzzy_pwm(float particulas) {
@@ -246,7 +256,7 @@ void loop() {
     Serial.print("ST="); Serial.print(estado_str());
     Serial.print(",PWM="); Serial.print(pwm_actual);
     Serial.print(",CS="); Serial.print(caudal_mlmin, 1);
-    Serial.print(",MEM="); Serial.print(membresia_actual);
+    Serial.print(",MEM="); Serial.print(NOMBRES_MEMBRESIA[membresia_actual]);
     Serial.print(",VOL="); Serial.println(volumen_ml, 1);
   }
 
@@ -268,7 +278,7 @@ void loop() {
       pulsos_anterior = 0;
       ventana_llena = false;
       idx = 0;
-      membresia_actual = "-";
+      membresia_actual = MEM_NINGUNA;
       set_pwm(PWM_LIMPIEZA);
       iniciar_rampa(PWM_LIMPIEZA, PWM_MIN, RAMPA_SUBIDA);
     }
@@ -305,7 +315,7 @@ void loop() {
       Serial.print(",PWM="); Serial.print(pwm);
       Serial.print(",CF="); Serial.print(caudal_fuzzy, 1);
       Serial.print(",CS="); Serial.print(caudal_mlmin, 1);
-      Serial.print(",MEM="); Serial.println(membresia_actual);
+      Serial.print(",MEM="); Serial.println(NOMBRES_MEMBRESIA[membresia_actual]);
     }
 
     // Override manual de caudal (botones +/- del dashboard). Solo para

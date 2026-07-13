@@ -19,7 +19,7 @@ import cv2
 from PIL import Image, ImageTk
 
 from processing import FrameResult, Mode
-from arduino.arduino import PumpState, PumpStatus
+from arduino.arduino import Membership, PumpState, PumpStatus
 
 POLL_MS = 33
 CROP_STEP = 5
@@ -37,6 +37,23 @@ ACCENT_START = "#2e7d32"   # verde Inicio
 ACCENT_STOP = "#b71c1c"    # rojo Detener/Salir
 FIBER_COLOR = "#ffa726"    # naranja, mismo criterio que CLASS_COLORS
 AMORF_COLOR = "#66bb6a"    # verde
+
+# Texto amigable para el estado de la bomba: unica fuente de verdad, para
+# no imprimir el valor crudo del protocolo (MEDIA, RAMPA_STOP) en la UI.
+MEMBERSHIP_LABELS = {
+    Membership.MUY_POCAS: "Muy pocas",
+    Membership.POCAS: "Pocas",
+    Membership.MEDIA: "Media",
+    Membership.MUCHAS: "Muchas",
+    Membership.NONE: "-",
+}
+STATE_LABELS = {
+    PumpState.OFF: "Apagada",
+    PumpState.LIMPIEZA: "Limpieza",
+    PumpState.RAMPA_SUBIDA: "Arrancando",
+    PumpState.FUZZY_ACTIVO: "Fuzzy",
+    PumpState.RAMPA_STOP: "Deteniendo",
+}
 
 
 @dataclass
@@ -280,7 +297,10 @@ class App:
         caudal_text = f"Caudal: {status.caudal:.0f} ml/min"
         self._caudal_label.config(text=caudal_text)
         self._calib_caudal_label.config(text=caudal_text)
-        label = status.membership if status.state == PumpState.FUZZY_ACTIVO else status.state
+        if status.state == PumpState.FUZZY_ACTIVO:
+            label = MEMBERSHIP_LABELS[status.membership]
+        else:
+            label = STATE_LABELS[status.state]
         self._pump_label.config(text=f"Bomba: {label}")
 
     def _render(self, result: FrameResult) -> None:

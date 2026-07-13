@@ -36,16 +36,26 @@ class PumpState(StrEnum):
     RAMPA_STOP = "RAMPA_STOP"
 
 
+class Membership(StrEnum):
+    """Espeja NOMBRES_MEMBRESIA del sketch (bomba_fuzzy.ino)."""
+    MUY_POCAS = "MUY_POCAS"
+    POCAS = "POCAS"
+    MEDIA = "MEDIA"
+    MUCHAS = "MUCHAS"
+    NONE = "-"
+
+
 @dataclass(frozen=True)
 class PumpStatus:
     state: PumpState
     pwm: int
     caudal: float
-    membership: str
+    membership: Membership
     volume_ml: float
 
 
-IDLE_STATUS = PumpStatus(state=PumpState.OFF, pwm=0, caudal=0.0, membership="-", volume_ml=0.0)
+IDLE_STATUS = PumpStatus(state=PumpState.OFF, pwm=0, caudal=0.0,
+                         membership=Membership.NONE, volume_ml=0.0)
 
 
 class Arduino:
@@ -96,7 +106,7 @@ class Arduino:
                 state=PumpState(fields["ST"]),
                 pwm=int(fields["PWM"]),
                 caudal=float(fields["CS"]),
-                membership=fields["MEM"],
+                membership=Membership(fields["MEM"]),
                 volume_ml=float(fields["VOL"]),
             )
         except (KeyError, ValueError):
