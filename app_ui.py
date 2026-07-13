@@ -226,6 +226,9 @@ class App:
         self._membership_label = tk.Label(counts_frame, text="Membresía: -",
                                           bg=BG, font=pump_font, fg=FG_DIM)
         self._membership_label.pack(anchor="w", pady=1)
+        self._volume_label = tk.Label(counts_frame, text="Volumen: -", bg=BG,
+                                      font=pump_font, fg=FG_DIM)
+        self._volume_label.pack(anchor="w", pady=1)
 
         # --- vista de calibracion ---
         self._calib_view = tk.Frame(panel, bg=BG)
@@ -346,6 +349,7 @@ class App:
             membership_color = FG_DIM
         self._membership_label.config(text=f"Membresía: {membership}",
                                       fg=membership_color)
+        self._volume_label.config(text=f"Volumen: {status.volume_ml:.0f} ml")
 
     def _render(self, result: FrameResult) -> None:
         frame_rgb = cv2.cvtColor(result.frame_bgr, cv2.COLOR_BGR2RGB)
