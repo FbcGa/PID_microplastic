@@ -9,6 +9,7 @@ thread only reads frames.
 
 import queue
 import threading
+import time
 from dataclasses import dataclass
 from enum import Enum, auto
 
@@ -24,6 +25,7 @@ from tracker import Tracker
 from visualization import annotate
 
 LINE_COLOR = (0, 255, 255)
+COUNT_SEND_INTERVAL_S = 1.0  # ventana fuzzy en el Arduino es de 10 muestras
 
 
 class Mode(Enum):
@@ -45,11 +47,12 @@ class PipelineWorker(threading.Thread):
     the public methods below and drains `results`."""
 
     def __init__(self, camera, classifier: RandomForestParticleClassifier,
-                 calibration: Calibration,
+                 calibration: Calibration, pump=None,
                  seg_cfg: BackgroundSegmentationConfig = BackgroundSegmentationConfig()):
         super().__init__(daemon=True)
         self._camera = camera
         self._classifier = classifier
+        self._pump = pump
         self._seg_cfg = seg_cfg
         self.results: queue.Queue[FrameResult] = queue.Queue(maxsize=1)
 
@@ -62,6 +65,7 @@ class PipelineWorker(threading.Thread):
         self._background_bgr: np.ndarray | None = None
         self._background_g: np.ndarray | None = None
         self._stop_requested = False
+        self._last_count_sent = 0.0
 
     # --- commands from the UI thread ---
 
@@ -117,6 +121,11 @@ class PipelineWorker(threading.Thread):
                 annotated = annotate(cropped, particles, tracks, tracker)
                 result = FrameResult(annotated, tracker.total_fibers,
                                      tracker.total_amorphous, mode)
+                if self._pump is not None:
+                    now = time.monotonic()
+                    if now - self._last_count_sent >= COUNT_SEND_INTERVAL_S:
+                        self._last_count_sent = now
+                        self._pump.send_count(len(particles))
             elif mode == Mode.PREVIEW:
                 result = FrameResult(self._draw_crop_lines(frame, top, bottom), 0, 0, mode)
             else:

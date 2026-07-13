@@ -15,6 +15,7 @@ from app_ui import App, Callbacks
 from calibration import BACKGROUND_PATH, load_calibration, save_calibration
 from camera import RESOLUTION, open_camera
 from processing import Mode, PipelineWorker
+from pump import open_pump
 from random_forest.rf_classifier import load_if_available
 
 MIN_VISIBLE_HEIGHT = 20  # margen minimo entre las lineas de crop sup/inf
@@ -27,6 +28,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--model", type=Path,
                         default=Path("random_forest/rf_model.joblib"),
                         help="Modelo Random Forest entrenado")
+    parser.add_argument("--pump-port", default="/dev/ttyACM0",
+                        help="Puerto serial del Arduino de la bomba; "
+                             "'mock' para simularla en desarrollo en PC")
     return parser.parse_args()
 
 
@@ -41,14 +45,16 @@ def main() -> None:
     calibration = load_calibration()
     camera = open_camera(args.source)
     camera.start()
+    pump = open_pump(args.pump_port)
 
-    worker = PipelineWorker(camera, classifier, calibration)
+    worker = PipelineWorker(camera, classifier, calibration, pump)
     worker.start()
 
     root = tk.Tk()
 
     def on_calibrate() -> None:
         worker.set_mode(Mode.PREVIEW)
+        pump.calibrate()
 
     def on_crop_change(top: int, bottom: int) -> None:
         max_total = RESOLUTION[1] - MIN_VISIBLE_HEIGHT
@@ -65,16 +71,21 @@ def main() -> None:
     def on_save_calibration() -> None:
         save_calibration(calibration)
         worker.set_mode(Mode.IDLE)
+        pump.stop()
 
     def on_start() -> None:
         worker.start_counting(calibration)
+        pump.start()
 
     def on_stop() -> None:
         worker.set_mode(Mode.IDLE)
+        pump.stop()
 
     def on_close() -> None:
         worker.stop()
         camera.stop()
+        pump.stop()
+        pump.close()
         root.destroy()
 
     callbacks = Callbacks(
@@ -88,7 +99,8 @@ def main() -> None:
     )
 
     app = App(root, worker.results, callbacks, calibration.crop_top,
-              calibration.crop_bottom, background_exists=BACKGROUND_PATH.exists())
+              calibration.crop_bottom, background_exists=BACKGROUND_PATH.exists(),
+              get_pump_status=pump.status)
 
     root.protocol("WM_DELETE_WINDOW", on_close)
     root.mainloop()

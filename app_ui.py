@@ -19,6 +19,7 @@ import cv2
 from PIL import Image, ImageTk
 
 from processing import FrameResult, Mode
+from pump import PumpStatus
 
 POLL_MS = 33
 CROP_STEP = 5
@@ -61,12 +62,14 @@ def _button(parent, text, command, bg=BTN_BG, fg=FG, font=("Arial", 14, "bold"),
 class App:
     def __init__(self, root: tk.Tk, results: "queue.Queue[FrameResult]",
                  callbacks: Callbacks, initial_crop_top: int,
-                 initial_crop_bottom: int, background_exists: bool):
+                 initial_crop_bottom: int, background_exists: bool,
+                 get_pump_status: Callable[[], PumpStatus]):
         self._root = root
         self._queue = results
         self._cb = callbacks
         self._crop_top = initial_crop_top
         self._crop_bottom = initial_crop_bottom
+        self._get_pump_status = get_pump_status
         self._photo: ImageTk.PhotoImage | None = None  # referencia viva, Tkinter la descarta si no
 
         root.title("Microplasticos - captura en vivo")
@@ -157,6 +160,14 @@ class App:
                                      font=("Arial", 26, "bold"), fg=FG)
         self._total_label.pack(anchor="w", pady=6)
 
+        pump_font = ("Arial", 14)
+        self._caudal_label = tk.Label(counts_frame, text="Caudal: -", bg=BG,
+                                      font=pump_font, fg=FG_DIM)
+        self._caudal_label.pack(anchor="w", pady=(16, 2))
+        self._pump_label = tk.Label(counts_frame, text="Bomba: -", bg=BG,
+                                    font=pump_font, fg=FG_DIM)
+        self._pump_label.pack(anchor="w")
+
         # --- vista de calibracion ---
         self._calib_view = tk.Frame(panel, bg=BG)
         self._build_calibration_view(self._calib_view)
@@ -190,6 +201,11 @@ class App:
 
         _button(parent, "Guardar fondo", self._cb.on_capture_background,
                 height=2).pack(fill="x", padx=8, pady=(16, 8))
+
+        self._calib_caudal_label = tk.Label(parent, text="Caudal: -", bg=BG,
+                                            font=("Arial", 12), fg=FG_DIM)
+        self._calib_caudal_label.pack(anchor="w", padx=8, pady=(8, 0))
+
         _button(parent, "Volver", self._show_main,
                 height=2).pack(fill="x", padx=8, pady=8)
 
@@ -246,7 +262,15 @@ class App:
             pass
         else:
             self._render(result)
+        self._render_pump_status(self._get_pump_status())
         self._root.after(POLL_MS, self._poll_queue)
+
+    def _render_pump_status(self, status: PumpStatus) -> None:
+        caudal_text = f"Caudal: {status.caudal:.0f} ml/min"
+        self._caudal_label.config(text=caudal_text)
+        self._calib_caudal_label.config(text=caudal_text)
+        label = status.membership if status.state == "FUZZY_ACTIVO" else status.state
+        self._pump_label.config(text=f"Bomba: {label}")
 
     def _render(self, result: FrameResult) -> None:
         frame_rgb = cv2.cvtColor(result.frame_bgr, cv2.COLOR_BGR2RGB)
