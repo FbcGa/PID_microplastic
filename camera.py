@@ -1,4 +1,4 @@
-"""Real-time frame capture: Picamera2 on the Raspberry Pi, or a looping
+"""Real-time frame capture: rpicam-vid on the Raspberry Pi, or a looping
 video file to develop the UI on a PC without a camera.
 
 Both camera classes share a small duck-typed interface — start(), read()
@@ -8,6 +8,7 @@ Start/stop lifecycle is owned by the caller (main_live.py), not by the
 camera itself or by whoever reads from it.
 """
 
+import subprocess
 from pathlib import Path
 
 import cv2
@@ -22,33 +23,47 @@ AWB_GAINS = (3.0, 1.8)
 RESOLUTION = (1280, 720)
 
 
-class PiCamera:
-    """Captura en vivo desde la camara de la Pi via Picamera2."""
+class RpicamCamera:
+    """Captura en vivo desde la camara de la Pi via rpicam-vid, con los
+    mismos controles calibrados en tools/grabar.py (--awb custom,
+    --denoise cdn_off), pero emitiendo frames YUV420 crudos por stdout
+    en vez de grabar a mp4."""
 
     def __init__(self, resolution: tuple[int, int] = RESOLUTION):
-        from picamera2 import Picamera2  # solo importable en la Pi
-        from libcamera import controls
-
-        self._picam2 = Picamera2()
-        config = self._picam2.create_video_configuration(
-            main={"size": resolution, "format": "RGB888"})
-        self._picam2.configure(config)
-        self._picam2.set_controls({
-            "FrameRate": FPS,
-            "ExposureTime": SHUTTER_US,
-            "AnalogueGain": GAIN,
-            "AwbEnable": False,
-            "ColourGains": AWB_GAINS,
-            "NoiseReductionMode": controls.draft.NoiseReductionModeEnum.Off,
-        })
+        self._resolution = resolution
+        # YUV420: plano Y (w*h) + U y V submuestreados (w*h/4 cada uno).
+        self._frame_bytes = resolution[0] * resolution[1] * 3 // 2
+        self._proc: subprocess.Popen | None = None
 
     def start(self) -> None:
-        self._picam2.start()
+        w, h = self._resolution
+        cmd = [
+            "rpicam-vid",
+            "-t", "0",
+            "--nopreview",
+            "--width", str(w),
+            "--height", str(h),
+            "--framerate", str(FPS),
+            "--shutter", str(SHUTTER_US),
+            "--gain", str(GAIN),
+            "--awb", "custom",
+            "--awbgains", f"{AWB_GAINS[0]},{AWB_GAINS[1]}",
+            "--denoise", "cdn_off",
+            "--codec", "yuv420",
+            "--flush",
+            "-o", "-",
+        ]
+        self._proc = subprocess.Popen(
+            cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+            bufsize=self._frame_bytes)
 
-    def read(self) -> np.ndarray:
-        # RGB888 de Picamera2 ya es BGR en memoria: directo a OpenCV, sin
-        # cvtColor (eso rompería la segmentación por canal verde en silencio).
-        return self._picam2.capture_array("main")
+    def read(self) -> np.ndarray | None:
+        data = self._proc.stdout.read(self._frame_bytes)
+        if data is None or len(data) < self._frame_bytes:
+            return None  # rpicam-vid termino o pipe cortado
+        w, h = self._resolution
+        yuv = np.frombuffer(data, np.uint8).reshape(h * 3 // 2, w)
+        return cv2.cvtColor(yuv, cv2.COLOR_YUV2BGR_I420)
 
     def capture_background(self, path: Path) -> np.ndarray:
         frame = self.read()
@@ -56,7 +71,13 @@ class PiCamera:
         return frame
 
     def stop(self) -> None:
-        self._picam2.stop()
+        if self._proc is not None:
+            self._proc.terminate()
+            try:
+                self._proc.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                self._proc.kill()
+            self._proc = None
 
 
 class VideoFileCamera:
@@ -90,8 +111,8 @@ class VideoFileCamera:
 
 
 def open_camera(source: str | None):
-    """source=None -> Picamera2 (Raspberry Pi); source=path -> video
+    """source=None -> rpicam-vid (Raspberry Pi); source=path -> video
     looped, para desarrollo en PC sin camara."""
     if source is None:
-        return PiCamera()
+        return RpicamCamera()
     return VideoFileCamera(source)

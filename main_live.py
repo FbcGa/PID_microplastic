@@ -3,7 +3,7 @@ thread and Tkinter UI together. Callbacks stay thin (state transitions
 only) — all CV logic lives in processing.py, all capture in camera.py.
 
 Usage:
-    uv run main_live.py                      (Raspberry Pi: Picamera2)
+    uv run main_live.py                      (Raspberry Pi: rpicam-vid)
     uv run main_live.py --source video.mp4   (PC dev: loops a video file)
 """
 
@@ -23,7 +23,7 @@ MIN_VISIBLE_HEIGHT = 20  # margen minimo entre las lineas de crop sup/inf
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source", default=None,
-                        help="Video para desarrollo en PC; si se omite usa Picamera2")
+                        help="Video para desarrollo en PC; si se omite usa rpicam-vid")
     parser.add_argument("--model", type=Path,
                         default=Path("random_forest/rf_model.joblib"),
                         help="Modelo Random Forest entrenado")
