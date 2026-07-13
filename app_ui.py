@@ -23,7 +23,13 @@ from arduino.arduino import Membership, PumpState, PumpStatus
 
 POLL_MS = 33
 CROP_STEP = 5
-PANEL_WIDTH = 260
+
+# Layout fijo a la pantalla de 7'' de la Pi (800x480): mismas proporciones
+# en la PC de desarrollo, y presupuesto de alto conocido para que todos
+# los botones entren siempre en el panel.
+WINDOW_W = 800
+WINDOW_H = 480
+PANEL_WIDTH = 240
 
 ICONS_DIR = Path(__file__).resolve().parent / "icons"
 
@@ -84,7 +90,10 @@ class Callbacks:
     on_close: Callable[[], None]
 
 
-def _button(parent, text, command, bg=BTN_BG, fg=FG, font=("Arial", 14, "bold"),
+# Tamanos de fuente NEGATIVOS = pixeles (Tk): con puntos, Windows los
+# escala segun el DPI (125%/150%) y el layout de 800x480 se desborda en
+# la PC de desarrollo; en pixeles rinde identico en la Pi y en la PC.
+def _button(parent, text, command, bg=BTN_BG, fg=FG, font=("Arial", -16, "bold"),
             **kwargs) -> tk.Button:
     """Boton plano estilo tactil con la paleta oscura."""
     return tk.Button(parent, text=text, command=command, font=font, bg=bg,
@@ -108,20 +117,25 @@ class App:
 
         root.title("Microplasticos - captura en vivo")
         root.configure(bg=BG)
-        # Geometria clavada a la pantalla (7'' = 800x480 en la Pi) ademas
-        # del fullscreen: sin maxsize/resizable(False) el WM puede seguir
-        # agrandando la ventana si algun widget pide mas espacio.
+        # Ventana fija de 800x480 (pantalla de 7'' de la Pi): en la Pi
+        # ocupa la pantalla completa (fullscreen, sin barra de titulo); en
+        # la PC de desarrollo se ve una ventana identica, centrada. El
+        # maxsize/resizable(False) evita que el WM la agrande si algun
+        # widget pide mas espacio.
         screen_w = root.winfo_screenwidth()
         screen_h = root.winfo_screenheight()
-        root.geometry(f"{screen_w}x{screen_h}+0+0")
+        offset_x = max(0, (screen_w - WINDOW_W) // 2)
+        offset_y = max(0, (screen_h - WINDOW_H) // 2)
+        root.geometry(f"{WINDOW_W}x{WINDOW_H}+{offset_x}+{offset_y}")
         root.resizable(False, False)
-        root.maxsize(screen_w, screen_h)
-        root.attributes("-fullscreen", True)
+        root.maxsize(WINDOW_W, WINDOW_H)
+        if (screen_w, screen_h) == (WINDOW_W, WINDOW_H):
+            root.attributes("-fullscreen", True)
         root.grid_columnconfigure(0, weight=1)
         root.grid_rowconfigure(0, weight=1)
 
-        self._video_w = screen_w - PANEL_WIDTH
-        self._video_h = screen_h
+        self._video_w = WINDOW_W - PANEL_WIDTH
+        self._video_h = WINDOW_H
 
         # Frame de tamano fijo (grid_propagate(False)) para que el video no
         # arrastre el tamano de la ventana: sin esto, un Label crece para
@@ -146,24 +160,24 @@ class App:
         # Barra superior: logo institucional a la izquierda, icono de
         # configuracion a la derecha.
         top_bar = tk.Frame(panel, bg=BG)
-        top_bar.pack(fill="x", padx=8, pady=(8, 0))
+        top_bar.pack(fill="x", padx=8, pady=(6, 0))
 
-        self._logo_img = self._load_icon("logo.jpg", height=44)
+        self._logo_img = self._load_icon("logo.jpg", height=36)
         if self._logo_img is not None:
             tk.Label(top_bar, image=self._logo_img, bg=BG, bd=0).pack(side="left")
 
-        self._gear_img = self._load_icon("config.png", height=32)
+        self._gear_img = self._load_icon("config.png", height=28)
         self._btn_config = _button(top_bar, "⚙", self._show_calibration,
-                                   font=("Arial", 18), width=3)
+                                   font=("Arial", -21), width=3)
         if self._gear_img is not None:
-            self._btn_config.config(image=self._gear_img, text="", width=44,
-                                    height=44, bg=BG)
+            self._btn_config.config(image=self._gear_img, text="", width=36,
+                                    height=36, bg=BG)
         self._btn_config.pack(side="right")
 
         # Fullscreen sin barra de titulo: el unico camino tactil para
         # cerrar la app es este boton, anclado abajo del panel.
         bottom_row = tk.Frame(panel, bg=BG)
-        bottom_row.pack(side="bottom", fill="x", padx=8, pady=8)
+        bottom_row.pack(side="bottom", fill="x", padx=8, pady=(4, 8))
         _button(bottom_row, "Reiniciar", self._on_reset,
                 height=2).pack(side="left", expand=True, fill="x", padx=(0, 4))
         _button(bottom_row, "Salir", self._cb.on_close, fg="#ff6b6b",
@@ -174,7 +188,7 @@ class App:
         self._main_view.pack(fill="both", expand=True)
 
         start_stop_row = tk.Frame(self._main_view, bg=BG)
-        start_stop_row.pack(fill="x", padx=8, pady=(16, 8))
+        start_stop_row.pack(fill="x", padx=8, pady=(10, 4))
         self._btn_start = _button(start_stop_row, "Inicio", self._on_start,
                                   bg=ACCENT_START, height=2)
         self._btn_start.config(state="normal" if background_exists else "disabled")
@@ -185,33 +199,33 @@ class App:
         self._btn_stop.pack(side="left", expand=True, fill="x", padx=(4, 0))
 
         counts_frame = tk.Frame(self._main_view, bg=BG)
-        counts_frame.pack(fill="both", expand=True, padx=12, pady=16)
-        count_font = ("Arial", 22, "bold")
+        counts_frame.pack(fill="both", expand=True, padx=10, pady=8)
+        count_font = ("Arial", -22, "bold")
         self._fiber_label = tk.Label(counts_frame, text="Fibras: 0", bg=BG,
                                      font=count_font, fg=FIBER_COLOR)
-        self._fiber_label.pack(anchor="w", pady=6)
+        self._fiber_label.pack(anchor="w", pady=2)
         self._amorf_label = tk.Label(counts_frame, text="Amorfas: 0", bg=BG,
                                      font=count_font, fg=AMORF_COLOR)
-        self._amorf_label.pack(anchor="w", pady=6)
-        tk.Frame(counts_frame, bg="#333333", height=2).pack(fill="x", pady=8)
+        self._amorf_label.pack(anchor="w", pady=2)
+        tk.Frame(counts_frame, bg="#333333", height=2).pack(fill="x", pady=4)
         self._total_label = tk.Label(counts_frame, text="Total: 0", bg=BG,
-                                     font=("Arial", 26, "bold"), fg=FG)
-        self._total_label.pack(anchor="w", pady=6)
+                                     font=("Arial", -28, "bold"), fg=FG)
+        self._total_label.pack(anchor="w", pady=2)
 
         # Segundo divisor: separa los contadores (lo que importa de un
         # vistazo) de la telemetria de la bomba (contexto secundario).
-        tk.Frame(counts_frame, bg="#333333", height=2).pack(fill="x", pady=(16, 8))
+        tk.Frame(counts_frame, bg="#333333", height=2).pack(fill="x", pady=(8, 4))
 
-        pump_font = ("Arial", 14)
+        pump_font = ("Arial", -16)
         self._caudal_label = tk.Label(counts_frame, text="Caudal: -", bg=BG,
                                       font=pump_font, fg=FG_DIM)
-        self._caudal_label.pack(anchor="w", pady=3)
+        self._caudal_label.pack(anchor="w", pady=1)
         self._pump_label = tk.Label(counts_frame, text="Bomba: -", bg=BG,
                                     font=pump_font, fg=FG_DIM)
-        self._pump_label.pack(anchor="w", pady=3)
+        self._pump_label.pack(anchor="w", pady=1)
         self._membership_label = tk.Label(counts_frame, text="Membresía: -",
                                           bg=BG, font=pump_font, fg=FG_DIM)
-        self._membership_label.pack(anchor="w", pady=3)
+        self._membership_label.pack(anchor="w", pady=1)
 
         # --- vista de calibracion ---
         self._calib_view = tk.Frame(panel, bg=BG)
@@ -234,10 +248,10 @@ class App:
         self._btn_start.config(state="normal" if enabled else "disabled")
 
     def _build_calibration_view(self, parent: tk.Frame) -> None:
-        step_font = ("Arial", 14, "bold")
+        step_font = ("Arial", -17, "bold")
 
         tk.Label(parent, text="Calibracion", bg=BG, fg=FG,
-                 font=("Arial", 16, "bold")).pack(anchor="w", padx=8, pady=(16, 8))
+                 font=("Arial", -20, "bold")).pack(anchor="w", padx=8, pady=(10, 6))
 
         self._top_value = self._build_crop_row(parent, "Sup", step_font,
                                                self._crop_top, "top")
@@ -245,14 +259,14 @@ class App:
                                                   self._crop_bottom, "bottom")
 
         _button(parent, "Guardar fondo", self._cb.on_capture_background,
-                height=2).pack(fill="x", padx=8, pady=(16, 8))
+                height=2).pack(fill="x", padx=8, pady=(10, 4))
 
         self._calib_caudal_label = tk.Label(parent, text="Caudal: -", bg=BG,
-                                            font=("Arial", 12), fg=FG_DIM)
-        self._calib_caudal_label.pack(anchor="w", padx=8, pady=(8, 0))
+                                            font=("Arial", -16), fg=FG_DIM)
+        self._calib_caudal_label.pack(anchor="w", padx=8, pady=(6, 0))
 
         _button(parent, "Volver", self._show_main,
-                height=2).pack(fill="x", padx=8, pady=8)
+                height=2).pack(fill="x", padx=8, pady=(8, 4))
 
     def _build_crop_row(self, parent: tk.Frame, title: str, font: tuple,
                         initial: int, which: str) -> tk.Label:
