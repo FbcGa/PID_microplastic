@@ -50,6 +50,10 @@ bool ventana_llena = false;
 
 enum Estado { OFF, LIMPIEZA, RAMPA_SUBIDA, FUZZY_ACTIVO, RAMPA_BAJADA };
 Estado estado = OFF;
+
+// Prototipo manual: el IDE de Arduino genera los prototipos automaticos
+// antes de la definicion del enum, lo que rompe la compilacion.
+void iniciar_rampa(int desde, int hasta, Estado siguiente);
 int pwm_actual = 0;
 unsigned long ramp_start_ms = 0;
 int ramp_pwm_desde = 0;
