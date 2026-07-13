@@ -43,7 +43,10 @@ class Arduino:
     Arduino imprime una vez por segundo (linea ST=...)."""
 
     def __init__(self, port: str, baudrate: int = BAUDRATE):
-        self._serial = serial.Serial(port, baudrate, timeout=1)
+        # write_timeout: sin el, serial.write() puede bloquearse para
+        # siempre si el dispositivo no drena (y _send corre en el hilo de
+        # la UI, asi que congelaria toda la app sin error en consola).
+        self._serial = serial.Serial(port, baudrate, timeout=1, write_timeout=1)
         self._write_lock = threading.Lock()
         self._status_lock = threading.Lock()
         self._status = IDLE_STATUS
