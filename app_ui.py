@@ -360,7 +360,10 @@ class App:
         # winfo_width/height como objetivo crea un bucle de crecimiento.
         scale = min(self._video_w / image.width, self._video_h / image.height)
         new_size = (max(1, int(image.width * scale)), max(1, int(image.height * scale)))
-        image = image.resize(new_size)
+        # NEAREST: el default (BICUBIC) cuesta 5.3 ms/frame en la Pi 5 vs
+        # 0.4 ms, medido con tools/benchmark_live.py --with-ui-cost, y esto
+        # corre en el hilo de Tk que atiende la pantalla tactil.
+        image = image.resize(new_size, Image.Resampling.NEAREST)
 
         self._photo = ImageTk.PhotoImage(image)
         self._video_label.configure(image=self._photo)
