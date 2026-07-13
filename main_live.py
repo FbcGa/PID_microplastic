@@ -71,8 +71,8 @@ def main() -> None:
         worker.set_crop(top, bottom)
 
     def on_capture_background() -> None:
-        worker.capture_background()
-        app.set_start_enabled(True)
+        if worker.capture_background():
+            app.set_start_enabled(True)
 
     def on_save_calibration() -> None:
         save_calibration(calibration)

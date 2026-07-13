@@ -121,6 +121,14 @@ def segment_against_background(frame_bgr: np.ndarray, background_bgr: np.ndarray
     son para depuracion visual, uv run detector.py --debug-stages)."""
     g = frame_bgr[:, :, 1]
     bg_g = background_g if background_g is not None else background_bgr[:, :, 1]
+    # Compensacion de iluminacion global: reescala el canal G del frame para
+    # que su media coincida con la del fondo. Una deriva de brillo uniforme
+    # (LEDs calentandose, alimentacion) ya no dispara el diff_thresh en toda
+    # la imagen; el contraste local particula-vs-fondo se conserva.
+    mean_g = cv2.mean(g)[0]
+    mean_bg = cv2.mean(bg_g)[0]
+    if mean_g > 0:
+        g = cv2.convertScaleAbs(g, alpha=mean_bg / mean_g)
     diff = cv2.absdiff(g, bg_g)
     blurred = cv2.GaussianBlur(diff, (cfg.blur_ksize, cfg.blur_ksize), 0)
     _, binary = cv2.threshold(blurred, cfg.diff_thresh, 255, cv2.THRESH_BINARY)

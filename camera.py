@@ -2,14 +2,14 @@
 video file to develop the UI on a PC without a camera.
 
 Both camera classes share a small duck-typed interface — start(), read()
--> np.ndarray | None, stop(), capture_background(path) -> np.ndarray — so
-processing.py and main_live.py don't need to know which one they got.
+-> np.ndarray | None, stop() — so processing.py and main_live.py don't
+need to know which one they got. (Capturing the background image is the
+worker's job, from its own thread: only one reader may touch the stream.)
 Start/stop lifecycle is owned by the caller (main_live.py), not by the
 camera itself or by whoever reads from it.
 """
 
 import subprocess
-from pathlib import Path
 
 import cv2
 import numpy as np
@@ -64,11 +64,6 @@ class RpicamCamera:
         yuv = np.frombuffer(data, np.uint8).reshape(h * 3 // 2, w)
         return cv2.cvtColor(yuv, cv2.COLOR_YUV2BGR_I420)
 
-    def capture_background(self, path: Path) -> np.ndarray:
-        frame = self.read()
-        cv2.imwrite(str(path), frame)
-        return frame
-
     def stop(self) -> None:
         if self._proc is not None:
             self._proc.terminate()
@@ -98,11 +93,6 @@ class VideoFileCamera:
             self._cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
             ok, frame = self._cap.read()
         return frame if ok else None
-
-    def capture_background(self, path: Path) -> np.ndarray:
-        frame = self.read()
-        cv2.imwrite(str(path), frame)
-        return frame
 
     def stop(self) -> None:
         if self._cap is not None:

@@ -7,6 +7,7 @@ Camera start/stop lifecycle belongs to the caller (main_live.py); this
 thread only reads frames.
 """
 
+import logging
 import queue
 import threading
 import time
@@ -24,8 +25,18 @@ from random_forest.rf_classifier import RandomForestParticleClassifier
 from tracker import Tracker
 from visualization import annotate
 
+logger = logging.getLogger(__name__)
+
 LINE_COLOR = (0, 255, 255)
 COUNT_SEND_INTERVAL_S = 1.0  # ventana fuzzy en el Arduino es de 10 muestras
+# Espera cuando la camara no entrega frames: sin ella, el loop del worker
+# gira en caliente acaparando el GIL y la UI (otro hilo Python) se congela
+# sin ningun error en consola.
+NO_FRAME_SLEEP_S = 0.05
+# Cuanto espera capture_background() a que el worker guarde el frame; a
+# 30 fps el frame llega en ~33 ms, asi que 2 s solo vence si la camara murio.
+CAPTURE_TIMEOUT_S = 2.0
+NO_FRAME_LOG_INTERVAL_S = 5.0  # no inundar la consola mientras se reintenta
 
 
 class Mode(Enum):
@@ -66,6 +77,9 @@ class PipelineWorker(threading.Thread):
         self._background_g: np.ndarray | None = None
         self._stop_requested = False
         self._last_count_sent = 0.0
+        self._capture_requested = False
+        self._capture_done = threading.Event()
+        self._last_no_frame_log = float("-inf")
 
     # --- commands from the UI thread ---
 
@@ -92,8 +106,19 @@ class PipelineWorker(threading.Thread):
             self._tracker = Tracker(TrackerConfig())
             self._mode = Mode.RUNNING
 
-    def capture_background(self) -> None:
-        self._camera.capture_background(BACKGROUND_PATH)
+    def capture_background(self) -> bool:
+        """Pide al worker que guarde su proximo frame como fondo y espera a
+        que lo haga. Leer la camara directamente desde el hilo de la UI
+        competiria con el worker por el mismo pipe y congelaria la interfaz.
+        Devuelve False si la camara no entrego un frame a tiempo."""
+        self._capture_done.clear()
+        with self._lock:
+            self._capture_requested = True
+        if not self._capture_done.wait(timeout=CAPTURE_TIMEOUT_S):
+            logger.warning("La camara no entrego un frame para el fondo "
+                           "en %.0fs", CAPTURE_TIMEOUT_S)
+            return False
+        return True
 
     def reset_counts(self) -> None:
         with self._lock:
@@ -109,6 +134,11 @@ class PipelineWorker(threading.Thread):
         while not self._stop_requested:
             frame = self._camera.read()
             if frame is None:
+                now = time.monotonic()
+                if now - self._last_no_frame_log >= NO_FRAME_LOG_INTERVAL_S:
+                    self._last_no_frame_log = now
+                    logger.warning("La camara no entrega frames; reintentando")
+                time.sleep(NO_FRAME_SLEEP_S)
                 continue
 
             with self._lock:
@@ -117,6 +147,12 @@ class PipelineWorker(threading.Thread):
                 tracker = self._tracker
                 background_bgr = self._background_bgr
                 background_g = self._background_g
+                capture_requested = self._capture_requested
+                self._capture_requested = False
+
+            if capture_requested:
+                cv2.imwrite(str(BACKGROUND_PATH), frame)
+                self._capture_done.set()
 
             if mode == Mode.RUNNING and tracker is not None:
                 cropped = crop_top_bottom_strips(frame, top, bottom)
