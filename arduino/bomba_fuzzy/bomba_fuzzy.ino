@@ -23,15 +23,13 @@ const int PWM_MAX = 138;
 const float CAUDAL_MIN = 120.0;
 const float CAUDAL_MAX = 150.0;
 
-// Rampas comandadas por START/STOP (limpieza inicial de la imagen y
-// apagado suave); fuera del rango fuzzy_pwm a proposito.
-const int PWM_RAMPA_INICIO = 115;
-const int PWM_RAMPA_FIN = 200;
+// START: rampa lineal de PWM_LIMPIEZA (max) a PWM_MIN en RAMPA_MS,
+// luego entra el fuzzy.
 const unsigned long RAMPA_MS = 8000;
-// Parada escalonada: baja PASO_PWM_BAJADA y mantiene cada escalon
-// PASO_MS_BAJADA hasta llegar a PWM_RAMPA_INICIO, luego apaga.
-const int PASO_PWM_BAJADA = 5;
-const unsigned long PASO_MS_BAJADA = 5000UL;
+// STOP: desde el PWM actual del fuzzy sube PASO_PWM_STOP cada
+// PASO_MS_STOP hasta PWM_LIMPIEZA (purga), y ahi se apaga.
+const int PASO_PWM_STOP = 50;
+const unsigned long PASO_MS_STOP = 2000UL;
 const int PWM_LIMPIEZA = 255;
 
 const int VENTANA = 10;
@@ -39,7 +37,7 @@ float historial[VENTANA];
 int idx = 0;
 bool ventana_llena = false;
 
-enum Estado { OFF, LIMPIEZA, RAMPA_SUBIDA, FUZZY_ACTIVO, RAMPA_BAJADA };
+enum Estado { OFF, LIMPIEZA, RAMPA_SUBIDA, FUZZY_ACTIVO, RAMPA_STOP };
 Estado estado = OFF;
 
 // Prototipo manual: el IDE de Arduino genera los prototipos automaticos
@@ -156,7 +154,7 @@ const char* estado_str() {
     case LIMPIEZA: return "LIMPIEZA";
     case RAMPA_SUBIDA: return "RAMPA_SUBIDA";
     case FUZZY_ACTIVO: return "FUZZY_ACTIVO";
-    case RAMPA_BAJADA: return "RAMPA_BAJADA";
+    case RAMPA_STOP: return "RAMPA_STOP";
   }
   return "OFF";
 }
@@ -182,7 +180,7 @@ void actualizar_rampa() {
   unsigned long transcurrido = millis() - ramp_start_ms;
 
   if (estado == RAMPA_SUBIDA) {
-    // Arranque: lineal de PWM_RAMPA_FIN (max) a PWM_RAMPA_INICIO en RAMPA_MS.
+    // Arranque: lineal de PWM_LIMPIEZA (max) a PWM_MIN en RAMPA_MS.
     if (transcurrido >= RAMPA_MS) {
       set_pwm(ramp_pwm_hasta);
       estado = FUZZY_ACTIVO;
@@ -193,19 +191,19 @@ void actualizar_rampa() {
     set_pwm(pwm);
   }
 
-  else if (estado == RAMPA_BAJADA) {
-    // Parada escalonada: del caudal maximo (PWM_MAX) al minimo (PWM_MIN),
-    // bajando PASO_PWM_BAJADA cada PASO_MS_BAJADA; el escalon final
-    // tambien dura 5s antes de apagar del todo.
-    if (transcurrido < PASO_MS_BAJADA) return;
-    if (pwm_actual <= PWM_MIN) {
+  else if (estado == RAMPA_STOP) {
+    // Parada con purga: desde el PWM donde quedo el fuzzy sube
+    // PASO_PWM_STOP cada PASO_MS_STOP hasta PWM_LIMPIEZA; el escalon
+    // final tambien se mantiene su intervalo antes de apagar del todo.
+    if (transcurrido < PASO_MS_STOP) return;
+    if (pwm_actual >= PWM_LIMPIEZA) {
       analogWrite(PIN_PWM, 0);
       pwm_actual = 0;
       estado = OFF;
       imprimir_detenido();
       return;
     }
-    set_pwm(max(pwm_actual - PASO_PWM_BAJADA, PWM_MIN));
+    set_pwm(min(pwm_actual + PASO_PWM_STOP, PWM_LIMPIEZA));
     ramp_start_ms = millis();
   }
 }
@@ -271,16 +269,15 @@ void loop() {
       ventana_llena = false;
       idx = 0;
       membresia_actual = "-";
-      set_pwm(PWM_RAMPA_FIN);
-      iniciar_rampa(PWM_RAMPA_FIN, PWM_RAMPA_INICIO, RAMPA_SUBIDA);
+      set_pwm(PWM_LIMPIEZA);
+      iniciar_rampa(PWM_LIMPIEZA, PWM_MIN, RAMPA_SUBIDA);
     }
 
     else if (comando == "STOP") {
       if (estado != OFF) {
-        // La bajada arranca a caudal maximo absoluto (PWM 255, igual que
-        // limpieza) y escalona hasta el minimo (PWM_MIN) antes de apagar.
-        set_pwm(PWM_LIMPIEZA);
-        iniciar_rampa(PWM_LIMPIEZA, PWM_MIN, RAMPA_BAJADA);
+        // Purga de parada: desde el PWM actual sube en escalones hasta
+        // PWM_LIMPIEZA y recien ahi se apaga (ver actualizar_rampa).
+        iniciar_rampa(pwm_actual, PWM_LIMPIEZA, RAMPA_STOP);
       }
     }
 

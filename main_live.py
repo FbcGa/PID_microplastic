@@ -80,6 +80,9 @@ def main() -> None:
         worker.set_mode(Mode.IDLE)
         pump.stop()
 
+    def on_reset() -> None:
+        worker.reset_counts()
+
     def on_close() -> None:
         worker.stop()
         camera.stop()
@@ -94,6 +97,7 @@ def main() -> None:
         on_save_calibration=on_save_calibration,
         on_start=on_start,
         on_stop=on_stop,
+        on_reset=on_reset,
         on_close=on_close,
     )
 

@@ -47,6 +47,7 @@ class Callbacks:
     on_save_calibration: Callable[[], None]
     on_start: Callable[[], None]
     on_stop: Callable[[], None]
+    on_reset: Callable[[], None]
     on_close: Callable[[], None]
 
 
@@ -128,8 +129,12 @@ class App:
 
         # Fullscreen sin barra de titulo: el unico camino tactil para
         # cerrar la app es este boton, anclado abajo del panel.
-        _button(panel, "Salir", self._cb.on_close, fg="#ff6b6b",
-                height=2).pack(side="bottom", fill="x", padx=8, pady=8)
+        bottom_row = tk.Frame(panel, bg=BG)
+        bottom_row.pack(side="bottom", fill="x", padx=8, pady=8)
+        _button(bottom_row, "Reiniciar", self._on_reset,
+                height=2).pack(side="left", expand=True, fill="x", padx=(0, 4))
+        _button(bottom_row, "Salir", self._cb.on_close, fg="#ff6b6b",
+                height=2).pack(side="left", expand=True, fill="x", padx=(4, 0))
 
         # --- vista principal ---
         self._main_view = tk.Frame(panel, bg=BG)
@@ -254,6 +259,12 @@ class App:
         self._btn_start.config(state="normal")
         self._btn_stop.config(state="disabled")
         self._btn_config.config(state="normal")
+
+    def _on_reset(self) -> None:
+        self._cb.on_reset()
+        self._fiber_label.config(text="Fibras: 0")
+        self._amorf_label.config(text="Amorfas: 0")
+        self._total_label.config(text="Total: 0")
 
     def _poll_queue(self) -> None:
         try:

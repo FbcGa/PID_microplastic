@@ -95,6 +95,11 @@ class PipelineWorker(threading.Thread):
     def capture_background(self) -> None:
         self._camera.capture_background(BACKGROUND_PATH)
 
+    def reset_counts(self) -> None:
+        with self._lock:
+            if self._tracker is not None:
+                self._tracker = Tracker(TrackerConfig())
+
     def stop(self) -> None:
         self._stop_requested = True
 
