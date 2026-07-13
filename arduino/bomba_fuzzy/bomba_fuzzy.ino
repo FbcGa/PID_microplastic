@@ -28,12 +28,12 @@ const float CAUDAL_MAX = 150.0;
 const unsigned long RAMPA_MS = 8000;
 // STOP: desde el PWM actual del fuzzy sube PASO_PWM_STOP cada
 // PASO_MS_STOP hasta PWM_STOP_TARGET (purga), y ahi se apaga. Con el
-// rango fuzzy (~130) son ~2 escalones de 3 s hasta 190, es decir ~6 s
+// rango fuzzy (~130) son ~4 escalones de 3 s hasta 255, es decir ~15 s
 // antes de apagar del todo.
 const int PASO_PWM_STOP = 40;
 const unsigned long PASO_MS_STOP = 3000UL;
 const int PWM_LIMPIEZA = 255;
-const int PWM_STOP_TARGET = 190;
+const int PWM_STOP_TARGET = 255;
 
 const int VENTANA = 10;
 float historial[VENTANA];
