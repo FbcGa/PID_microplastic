@@ -1,7 +1,7 @@
 """Bomba peristaltica: Arduino esclavo por serial controlando PWM con
-logica difusa. Espejo de camera.py: interfaz duck-typed (calibrate(),
-start(), stop(), send_count(n), status(), close()) para que main_live.py
-y processing.py no sepan si hablan con el Arduino real o un mock.
+logica difusa. Toda la comunicacion vive en la clase Arduino; el resto
+de la app solo llama sus metodos (calibrate(), start(), stop(),
+send_count(n), status(), close()).
 
 Protocolo (linea por linea, terminada en \\n):
     Pi -> Arduino: CALIBRATE | START | STOP | N<conteo> | c<caudal>
@@ -57,6 +57,8 @@ class Arduino:
             try:
                 line = self._serial.readline().decode("ascii", errors="ignore").strip()
             except (serial.SerialException, OSError) as exc:
+                if self._stop_requested:  # close() cerro el puerto, no es error
+                    break
                 logger.warning("Error leyendo de la bomba: %s", exc)
                 continue
             if not line:
@@ -116,48 +118,9 @@ class Arduino:
         self._serial.close()
 
 
-class MockArduino:
-    """Simula la interfaz de la bomba para desarrollar la UI en la PC sin
-    Arduino conectado. No corre fuzzy real: solo un caudal fijo por estado,
-    suficiente para ver los labels moverse."""
-
-    def __init__(self):
-        self._state = "OFF"
-        self._caudal = 0.0
-
-    def calibrate(self) -> None:
-        self._state = "LIMPIEZA"
-        self._caudal = 300.0
-
-    def start(self) -> None:
-        self._state = "FUZZY_ACTIVO"
-        self._caudal = 135.0
-
-    def stop(self) -> None:
-        self._state = "OFF"
-        self._caudal = 0.0
-
-    def send_count(self, count: int) -> None:
-        pass
-
-    def status(self) -> PumpStatus:
-        membership = "MEDIA" if self._state == "FUZZY_ACTIVO" else "-"
-        return PumpStatus(state=self._state, pwm=0, caudal=self._caudal,
-                          membership=membership, volume_ml=0.0)
-
-    def close(self) -> None:
-        pass
-
-
-def open_arduino(port: str | None):
-    """port=None o 'mock' -> MockArduino; ruta de dispositivo -> Arduino.
-    Si abrir el puerto falla (Arduino no conectado), cae a MockArduino con
-    un warning: el conteo debe seguir funcionando aunque la bomba no este."""
-    if port is None or port == "mock":
-        return MockArduino()
-    try:
-        return Arduino(port)
-    except (serial.SerialException, OSError) as exc:
-        logger.warning("No se pudo abrir la bomba en %s (%s); usando MockArduino.",
-                       port, exc)
-        return MockArduino()
+def open_arduino(port: str) -> Arduino:
+    """Abre la bomba en el puerto dado. Si el puerto no existe o esta
+    ocupado, serial.SerialException sube tal cual: la app debe fallar
+    visible en vez de arrancar sin bomba (mismo criterio fail-fast que
+    el modelo RF en main_live.py)."""
+    return Arduino(port)

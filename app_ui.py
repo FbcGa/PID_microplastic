@@ -19,7 +19,7 @@ import cv2
 from PIL import Image, ImageTk
 
 from processing import FrameResult, Mode
-from pump import PumpStatus
+from arduino.arduino import PumpStatus
 
 POLL_MS = 33
 CROP_STEP = 5

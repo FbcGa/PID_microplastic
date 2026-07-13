@@ -15,7 +15,7 @@ from app_ui import App, Callbacks
 from calibration import BACKGROUND_PATH, load_calibration, save_calibration
 from camera import RESOLUTION, open_camera
 from processing import Mode, PipelineWorker
-from pump import open_pump
+from arduino.arduino import open_arduino
 from random_forest.rf_classifier import load_if_available
 
 MIN_VISIBLE_HEIGHT = 20  # margen minimo entre las lineas de crop sup/inf
@@ -29,8 +29,7 @@ def parse_args() -> argparse.Namespace:
                         default=Path("random_forest/rf_model.joblib"),
                         help="Modelo Random Forest entrenado")
     parser.add_argument("--pump-port", default="/dev/ttyACM0",
-                        help="Puerto serial del Arduino de la bomba; "
-                             "'mock' para simularla en desarrollo en PC")
+                        help="Puerto serial del Arduino de la bomba")
     return parser.parse_args()
 
 
@@ -45,7 +44,7 @@ def main() -> None:
     calibration = load_calibration()
     camera = open_camera(args.source)
     camera.start()
-    pump = open_pump(args.pump_port)
+    pump = open_arduino(args.pump_port)
 
     worker = PipelineWorker(camera, classifier, calibration, pump)
     worker.start()

@@ -17,9 +17,19 @@ const int PIN_AIN2 = 8;
 const int PIN_PWM  = 9;
 
 volatile long pulsos_total = 0;
+long pulsos_anterior = 0;
 float caudal_mlmin = 0;
 
 void contar_pulso() { pulsos_total++; }
+
+// Lectura atomica del contador: en AVR un long son 4 bytes y la ISR puede
+// interrumpir a mitad de lectura, corrompiendo el valor.
+long leer_pulsos() {
+  noInterrupts();
+  long pulsos = pulsos_total;
+  interrupts();
+  return pulsos;
+}
 
 const int PWM_MIN = 122;
 const int PWM_MAX = 138;
@@ -164,7 +174,7 @@ void iniciar_rampa(int desde, int hasta, Estado siguiente) {
 }
 
 void imprimir_detenido() {
-  float volumen_ml = pulsos_total / 4.85;
+  float volumen_ml = leer_pulsos() / 4.85;
   float volumen_litros = volumen_ml / 1000.0;
   Serial.print("SISTEMA_DETENIDO");
   Serial.print(",VOL="); Serial.print(volumen_ml, 1);
@@ -210,6 +220,9 @@ void setup() {
   attachInterrupt(digitalPinToInterrupt(2), contar_pulso, RISING);
 
   Serial.begin(9600);
+  // readStringUntil bloquea hasta su timeout si no llega el '\n'; con el
+  // default (1000 ms) una linea incompleta congelaria la rampa 1 segundo.
+  Serial.setTimeout(50);
   Serial.println("ESCLAVO_LISTO");
   Serial.println("Comandos: CALIBRATE | START | STOP | N<conteo_frame> | c<caudal>");
 }
@@ -220,15 +233,12 @@ void loop() {
   static unsigned long ultimo = 0;
   if (millis() - ultimo >= 1000) {
     ultimo = millis();
-    static long pulsos_anterior = 0;
-    detachInterrupt(digitalPinToInterrupt(2));
-    long pulsos_ahora = pulsos_total;
-    attachInterrupt(digitalPinToInterrupt(2), contar_pulso, RISING);
+    long pulsos_ahora = leer_pulsos();
     float pulsos_seg = pulsos_ahora - pulsos_anterior;
     pulsos_anterior = pulsos_ahora;
     caudal_mlmin = (pulsos_seg / 4.85) * 60.0;
 
-    float volumen_ml = pulsos_total / 4.85;
+    float volumen_ml = pulsos_ahora / 4.85;
     Serial.print("ST="); Serial.print(estado_str());
     Serial.print(",PWM="); Serial.print(pwm_actual);
     Serial.print(",CS="); Serial.print(caudal_mlmin, 1);
@@ -246,7 +256,12 @@ void loop() {
     }
 
     else if (comando == "START") {
+      noInterrupts();
       pulsos_total = 0;
+      interrupts();
+      // Sin esto, el primer CS tras el reset del contador sale negativo
+      // (pulsos_anterior quedaria con el valor de la corrida anterior).
+      pulsos_anterior = 0;
       ventana_llena = false;
       idx = 0;
       membresia_actual = "-";
@@ -302,7 +317,7 @@ void loop() {
       }
       int pwm = caudal_a_pwm(caudal_deseado);
       set_pwm(pwm);
-      float volumen_ml = pulsos_total / 4.85;
+      float volumen_ml = leer_pulsos() / 4.85;
       float volumen_litros = volumen_ml / 1000.0;
       Serial.print("OK:");
       Serial.print("CF="); Serial.print(caudal_deseado, 1);
