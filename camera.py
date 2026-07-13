@@ -20,7 +20,9 @@ FPS = 30
 SHUTTER_US = 500
 GAIN = 8.0
 AWB_GAINS = (3.0, 1.8)
-RESOLUTION = (1280, 720)
+# Default de rpicam-vid (no se pasa --width/--height); igual que los videos
+# grabados con tools/grabar.py. Necesaria para trocear el stream YUV crudo.
+RESOLUTION = (640, 480)
 
 
 class RpicamCamera:
@@ -36,13 +38,10 @@ class RpicamCamera:
         self._proc: subprocess.Popen | None = None
 
     def start(self) -> None:
-        w, h = self._resolution
         cmd = [
             "rpicam-vid",
             "-t", "0",
             "--nopreview",
-            "--width", str(w),
-            "--height", str(h),
             "--framerate", str(FPS),
             "--shutter", str(SHUTTER_US),
             "--gain", str(GAIN),
