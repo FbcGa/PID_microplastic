@@ -6,8 +6,9 @@
 //
 // Maquina de estados (comandada por la Pi, la rampa corre aqui):
 //   OFF -> CALIBRATE -> LIMPIEZA (caudal maximo, purga la imagen)
-//   OFF/LIMPIEZA -> START -> RAMPA_SUBIDA (PWM 115->200 en 8s) -> FUZZY_ACTIVO
-//   cualquier estado != OFF -> STOP -> RAMPA_BAJADA (PWM actual->115 en 8s) -> OFF
+//   OFF/LIMPIEZA -> START -> RAMPA_SUBIDA (PWM 200->115 en 8s) -> FUZZY_ACTIVO
+//   cualquier estado != OFF -> STOP -> RAMPA_BAJADA (escalones de 5 PWM
+//     cada 5s desde el PWM actual hasta 115, luego apaga) -> OFF
 // Alipazaga & Loyola — UPC Lima 2025
 // ============================================
 
@@ -41,6 +42,10 @@ const float CAUDAL_MAX = 150.0;
 const int PWM_RAMPA_INICIO = 115;
 const int PWM_RAMPA_FIN = 200;
 const unsigned long RAMPA_MS = 8000;
+// Parada escalonada: baja PASO_PWM_BAJADA y mantiene cada escalon
+// PASO_MS_BAJADA hasta llegar a PWM_RAMPA_INICIO, luego apaga.
+const int PASO_PWM_BAJADA = 5;
+const unsigned long PASO_MS_BAJADA = 5000UL;
 const int PWM_LIMPIEZA = 255;
 
 const int VENTANA = 10;
@@ -188,24 +193,35 @@ void imprimir_detenido() {
 // Recalcula el PWM de la rampa en curso a partir de millis(): nada de
 // delay(), asi que no bloquea la lectura del puerto serie.
 void actualizar_rampa() {
-  if (estado != RAMPA_SUBIDA && estado != RAMPA_BAJADA) return;
-
   unsigned long transcurrido = millis() - ramp_start_ms;
-  if (transcurrido >= RAMPA_MS) {
-    if (estado == RAMPA_SUBIDA) {
+
+  if (estado == RAMPA_SUBIDA) {
+    // Arranque: lineal de PWM_RAMPA_FIN (max) a PWM_RAMPA_INICIO en RAMPA_MS.
+    if (transcurrido >= RAMPA_MS) {
       set_pwm(ramp_pwm_hasta);
       estado = FUZZY_ACTIVO;
-    } else {
+      return;
+    }
+    int pwm = ramp_pwm_desde +
+              (long)(ramp_pwm_hasta - ramp_pwm_desde) * transcurrido / RAMPA_MS;
+    set_pwm(pwm);
+  }
+
+  else if (estado == RAMPA_BAJADA) {
+    // Parada escalonada: cada PASO_MS_BAJADA baja PASO_PWM_BAJADA hasta
+    // llegar a PWM_RAMPA_INICIO; el escalon final tambien dura 5s antes
+    // de apagar del todo.
+    if (transcurrido < PASO_MS_BAJADA) return;
+    if (pwm_actual <= PWM_RAMPA_INICIO) {
       analogWrite(PIN_PWM, 0);
       pwm_actual = 0;
       estado = OFF;
       imprimir_detenido();
+      return;
     }
-    return;
+    set_pwm(max(pwm_actual - PASO_PWM_BAJADA, PWM_RAMPA_INICIO));
+    ramp_start_ms = millis();
   }
-  int pwm = ramp_pwm_desde +
-            (long)(ramp_pwm_hasta - ramp_pwm_desde) * transcurrido / RAMPA_MS;
-  set_pwm(pwm);
 }
 
 void setup() {
@@ -269,8 +285,8 @@ void loop() {
       ventana_llena = false;
       idx = 0;
       membresia_actual = "-";
-      set_pwm(PWM_RAMPA_INICIO);
-      iniciar_rampa(PWM_RAMPA_INICIO, PWM_RAMPA_FIN, RAMPA_SUBIDA);
+      set_pwm(PWM_RAMPA_FIN);
+      iniciar_rampa(PWM_RAMPA_FIN, PWM_RAMPA_INICIO, RAMPA_SUBIDA);
     }
 
     else if (comando == "STOP") {
