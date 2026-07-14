@@ -23,7 +23,7 @@ class BackgroundSegmentationConfig:
     # Cierre: une fragmentos rotos de una misma fibra
     close_ksize: int = 5
     # Filtro de tamano (px^2) — provisional hasta la calibracion um -> px
-    min_area: float = 250.0
+    min_area: float = 350.0
     max_area: float = 8000.0
     # Circularidad = 4*pi*Area/Perimetro^2. Blobs con circularidad >=
     # max_circularity se descartan por ser burbujas.
